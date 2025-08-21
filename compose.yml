@@ -1,0 +1,26 @@
+services:
+  requesthole-mongo:
+    image: mongo
+    restart: always
+    ports:
+      - 27017:27017 #TODO(GrossNate): close port before deploying
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME
+      - MONGO_INITDB_ROOT_PASSWORD
+    volumes:
+      - mongo-data:/data/db
+  requesthole-postgres:
+    image: 'postgres:17-alpine'
+    restart: always
+    ports:
+      - 5432:5432 #TODO(GrossNate): close port before deploying
+    environment:
+      - POSTGRES_USER
+      - POSTGRES_PASSWORD
+      - POSTGRES_DB=requesthole
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+volumes:
+  mongo-data:
+  postgres-data:
+    
