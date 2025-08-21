@@ -1,3 +1,8 @@
+<img
+  src="./favicon.png" 
+  alt="RequestHole logo"
+  width="192" />
+
 # RequestHole
 A place to capture, store, and examine your HTTP requests.
 
