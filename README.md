@@ -20,11 +20,12 @@ This uses [Docker Compose](https://docs.docker.com/compose/) and
 ## Route design
 
 | UI | route | purpose |
-|----|-------|---------|
+|:----|:-------|:---------|
 GET | `/`     | main - view all holes
 GET | `/view/:hole_address` | view list of requests in a hole
 GET | `/view/:hole_address/:request_address` | view details of a request
-**API** | **route** | **purpose**
+&nbsp;||
+**API** | | 
 GET | `/api/` | list API reference?
 GET | `/api/holes` | get all holes info
 GET | `/api/hole/:hole_address` | get hole info
@@ -33,5 +34,5 @@ DELETE | `/api/hole/:hole_address` | delete a hole
 GET | `/api/hole/:hole_address/requests` | get all requests for a hole
 GET | `/api/hole/:hole_address/request/:request_address` | get specific request
 DELETE | `/api/hole/:hole_address/request/:request_address` | delete specific request
- | | 
+&nbsp; | | 
 \* | `/:hole_address` | hole endpoint to ingest HTTP requests
