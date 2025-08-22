@@ -1,7 +1,7 @@
 {
   "scripts": {
     "tsc": "tsc",
-    "dev": "dotenvx run ts-node-dev src/index.ts",
+    "dev": "dotenvx run -f ../.env -f .env -- ts-node-dev src/index.ts",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "build": "tsc",
