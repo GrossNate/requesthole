@@ -1,7 +1,7 @@
 {
   "scripts": {
     "tsc": "tsc",
-    "dev": "ts-node-dev src/index.ts",
+    "dev": "dotenvx run ts-node-dev src/index.ts",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "build": "tsc",
@@ -13,6 +13,7 @@
     "@stylistic/eslint-plugin": "^5.2.3",
     "@types/eslint__js": "^8.42.3",
     "@types/node": "^24.3.0",
+    "@types/pg": "^8.15.5",
     "eslint": "^9.33.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.4",
@@ -22,6 +23,9 @@
     "typescript-eslint": "^8.40.0"
   },
   "dependencies": {
-    "fastify": "^5.5.0"
+    "@fastify/postgres": "^6.0.2",
+    "fastify": "^5.5.0",
+    "fastify-plugin": "^5.0.1",
+    "pg": "^8.16.3"
   }
 }
