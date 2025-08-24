@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 import fastifyPostgres from "@fastify/postgres";
-import holesRoute from "./holes";
+import holesRoute from "./routes/holes";
+import holeRoutes from "./routes/hole";
 import dbInit from "./db-init";
 
 const fastify = Fastify({
@@ -20,6 +21,7 @@ fastify.get('/testpg', async (_, reply) => {
 });
 
 fastify.register(holesRoute);
+fastify.register(holeRoutes);
 
 fastify.listen({ port: 3000 }, (err) => {
   if (err) {
