@@ -18,6 +18,7 @@ export default fp(
         method text NOT NULL,
         request_path text NOT NULL,
         query_params text,
+        headers text,
         body bytea
       );
     `);

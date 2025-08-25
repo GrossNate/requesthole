@@ -1,8 +1,6 @@
 import { FastifyInstance, RouteShorthandOptions } from "fastify";
 import { JSONSchemaType } from "ajv";
-import { v4 } from "uuid";
-import { crc32 } from "node:zlib";
-import base62 from "base62";
+import generateAddress from "../utils/address-generator";
 
 interface HoleParams {
   hole_address: string;
@@ -38,11 +36,9 @@ function routes(fastify: FastifyInstance, options: RouteShorthandOptions) {
   fastify.post("/api/hole", options, async (_, reply) => {
     const client = await fastify.pg.connect();
     try {
-      const uuid = v4();
-      const holeAddress = base62.encode(crc32(uuid));
       const { rows } = await client.query(
         "INSERT INTO holes (hole_address) VALUES ($1) RETURNING created, hole_address;",
-        [holeAddress],
+        [generateAddress()],
       );
       reply.send(rows);
     } finally {
@@ -61,7 +57,37 @@ function routes(fastify: FastifyInstance, options: RouteShorthandOptions) {
           "DELETE FROM holes WHERE hole_address = $1;",
           [hole_address],
         );
-        reply.code((rowCount ?? 0 > 0) ? 204 : 404);
+        reply.code(((rowCount ?? 0) > 0) ? 204 : 404);
+      } finally {
+        client.release();
+      }
+    },
+  );
+
+  fastify.get<{ Params: HoleParams }>(
+    "/api/hole/:hole_address/requests",
+    { ...options, schema: { params } },
+    async (request, reply) => {
+      const { hole_address } = request.params;
+      const client = await fastify.pg.connect();
+      try {
+        const { rows } = await client.query(
+          `
+            SELECT
+              request_address,
+              r.created,
+              method,
+              request_path,
+              query_params,
+              headers,
+              body
+            FROM holes AS h
+            INNER JOIN requests AS r USING (hole_id)
+            WHERE hole_address = $1
+          `,
+          [hole_address],
+        );
+        reply.send(rows);
       } finally {
         client.release();
       }
