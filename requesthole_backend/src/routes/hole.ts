@@ -79,8 +79,7 @@ function routes(fastify: FastifyInstance, options: RouteShorthandOptions) {
               method,
               request_path,
               query_params,
-              headers,
-              body
+              headers
             FROM holes AS h
             INNER JOIN requests AS r USING (hole_id)
             WHERE hole_address = $1

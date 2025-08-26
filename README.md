@@ -32,7 +32,7 @@ GET | `/api/hole/:hole_address` | get hole info
 POST | `/api/hole` | create a new hole
 DELETE | `/api/hole/:hole_address` | delete a hole
 GET | `/api/hole/:hole_address/requests` | get all requests for a hole
-GET | `/api/hole/:hole_address/request/:request_address` | get specific request
-DELETE | `/api/hole/:hole_address/request/:request_address` | delete specific request
+GET | `/api/request/:request_address` | get specific request
+DELETE | `/api/request/:request_address` | delete specific request
 &nbsp; | | 
 \* | `/:hole_address` | hole endpoint to ingest HTTP requests

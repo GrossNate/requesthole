@@ -3,6 +3,7 @@ import fastifyPostgres from "@fastify/postgres";
 import holesRoute from "./routes/holes";
 import holeRoutes from "./routes/hole";
 import collectRoute from "./routes/collect";
+import requestRoutes from "./routes/request";
 import dbInit from "./db-init";
 
 const fastify = Fastify({
@@ -15,6 +16,7 @@ fastify.register(dbInit);
 
 fastify.register(holesRoute);
 fastify.register(holeRoutes);
+fastify.register(requestRoutes);
 fastify.register(collectRoute);
 
 fastify.listen({ port: 3000 }, (err) => {
