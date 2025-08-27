@@ -5,10 +5,13 @@ import holeRoutes from "./routes/hole";
 import collectRoute from "./routes/collect";
 import requestRoutes from "./routes/request";
 import dbInit from "./db-init";
+import cors from "@fastify/cors";
 
 const fastify = Fastify({
   logger: true,
 });
+
+fastify.register(cors);
 fastify.register(fastifyPostgres, {
   connectionString: process.env.POSTGRES_URI,
 });
