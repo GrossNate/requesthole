@@ -11,7 +11,7 @@ const fastify = Fastify({
   logger: true,
 });
 
-fastify.register(cors);
+fastify.register(cors, { methods: ["GET", "POST", "DELETE"] });
 fastify.register(fastifyPostgres, {
   connectionString: process.env.POSTGRES_URI,
 });

@@ -40,6 +40,7 @@ function routes(fastify: FastifyInstance, options: RouteShorthandOptions) {
         "INSERT INTO holes (hole_address) VALUES ($1) RETURNING created, hole_address;",
         [generateAddress()],
       );
+      reply.code(201);
       reply.send(rows);
     } finally {
       client.release();
