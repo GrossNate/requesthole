@@ -42,9 +42,24 @@ async function getRequests(holeAddress: string): Promise<RequestObject[]> {
   if (response.status === 200) {
     return response.data;
   } else {
-    throw new Error(`Failed to get requests.`);
+    throw new Error("Failed to get requests.");
   }
-  
 }
 
-export default { addHole, getHoles, getHole, deleteHole, getRequests };
+async function getRequest(requestAddress: string): Promise<RequestObject> {
+  const response = await axios.get(`${BASE_URL}/api/request/${requestAddress}`);
+  if (response.status === 200) {
+    return response.data;
+  } else {
+    throw new Error("Failed to get request.");
+  }
+}
+
+export default {
+  addHole,
+  getHoles,
+  getHole,
+  deleteHole,
+  getRequests,
+  getRequest,
+};

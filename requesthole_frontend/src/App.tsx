@@ -16,7 +16,7 @@ function App() {
         setHoles(responseHoles);
       })
       .catch((error) => console.error(error));
-  });
+  }, []);
 
   const createHole = () => {
     holeService
@@ -41,12 +41,20 @@ function App() {
         </div>
         <div className="flex-none z-50">
           <ul className="menu menu-horizontal px-1">
-            <li><Link to="/">home</Link></li>
+            <li>
+              <Link to="/">Home</Link>
+            </li>
             <li>
               <details id="basketMenuDetails">
                 <summary>Holes</summary>
                 <ul className="bg-base-100 rounded-t-none p-2">
-                  {/* {allBaskets(baskets)} */}
+                  {holes.map((hole) => (
+                    <li>
+                      <Link to={`/view/${hole.hole_address}`}>
+                        {hole.hole_address}
+                      </Link>
+                    </li>
+                  ))}
                 </ul>
               </details>
             </li>
@@ -61,7 +69,10 @@ function App() {
             <Home holes={holes} setHoles={setHoles} createHole={createHole} />
           }
         />
-        <Route path="/view/:hole_address/:request_address" element={<Request />} />
+        <Route
+          path="/view/:hole_address/:request_address"
+          element={<Request />}
+        />
       </Routes>
     </>
   );

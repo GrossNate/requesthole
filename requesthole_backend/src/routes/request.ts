@@ -57,7 +57,7 @@ function routes(fastify: FastifyInstance, options: RouteShorthandOptions) {
         if (rows.length < 1) {
           reply.code(404);
         } else {
-          reply.send(rows);
+          reply.send(rows[0]);
         }
       } finally {
         client.release();

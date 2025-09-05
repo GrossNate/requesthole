@@ -33,12 +33,14 @@ const Hole = () => {
         </thead>
         <tbody>
           {holeRequests.map((request) => (
-            <tr key={request.request_address}>
-              <td>{request.method}</td>
-              <td>{request.request_path}</td>
-              <td>{request.query_params}</td>
-              <td>{request.created}</td>
-            </tr>
+            <Link to={`/view/${hole_address}/${request.request_address}`}>
+              <tr key={request.request_address}>
+                <td>{request.method}</td>
+                <td>{request.request_path}</td>
+                <td>{request.headers}</td>
+                <td>{request.created}</td>
+              </tr>
+            </Link>
           ))}
         </tbody>
       </table>
