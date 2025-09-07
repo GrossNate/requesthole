@@ -18,16 +18,9 @@ function App() {
       .catch((error) => console.error(error));
   }, []);
 
-  const createHole = () => {
-    holeService
-      .addHole()
-      .then((returnHoles) => {
-        setHoles([...holes, returnHoles[0].hole_address]);
-        alert(`Hole created! Address: ${returnHoles[0].hole_address}`);
-      })
-      .catch((error) => {
-        console.error(error.message);
-      });
+  const createHole = async () => {
+    const result = await holeService.addHole();
+    setHoles((prevHoles) => [...prevHoles, {hole_address: result[0].hole_address}]);
   };
 
   return (
@@ -49,7 +42,7 @@ function App() {
                 <summary>Holes</summary>
                 <ul className="bg-base-100 rounded-t-none p-2">
                   {holes.map((hole) => (
-                    <li>
+                    <li key={hole.hole_address}>
                       <Link to={`/view/${hole.hole_address}`}>
                         {hole.hole_address}
                       </Link>
