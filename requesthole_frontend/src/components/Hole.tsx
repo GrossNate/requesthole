@@ -17,8 +17,19 @@ const Hole = () => {
         .catch((error) => console.error(error));
     };
     refreshHole();
-    const refreshInterval = setInterval(() => refreshHole(), 60000);
-    return () => clearInterval(refreshInterval);
+
+    const sse = new EventSource(
+      `${holeService.BASE_URL}/api/hole/${hole_address}/events`,
+    );
+    sse.onmessage = (event) => {
+      setHoleRequests((prev) => [...prev, JSON.parse(event.data)]);
+    };
+    sse.onerror = () => {
+      sse.close();
+    };
+    return () => {
+      sse.close();
+    };
   }, [hole_address]);
 
   return (

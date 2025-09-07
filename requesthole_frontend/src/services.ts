@@ -62,4 +62,5 @@ export default {
   deleteHole,
   getRequests,
   getRequest,
+  BASE_URL
 };
