@@ -27,10 +27,10 @@ function App() {
     <>
       <div className="navbar bg-base-100">
         <div className="flex-1">
-          <a className="btn btn-ghost text-xl">
+          <h1 className="text-xl">
             <img src="favicon.png"></img>
             RequestHole
-          </a>
+          </h1>
         </div>
         <div className="flex-none z-50">
           <ul className="menu menu-horizontal px-1">
@@ -38,7 +38,7 @@ function App() {
               <Link to="/">Home</Link>
             </li>
             <li>
-              <details id="basketMenuDetails">
+              <details>
                 <summary>Holes</summary>
                 <ul className="bg-base-100 rounded-t-none p-2">
                   {holes.map((hole) => (

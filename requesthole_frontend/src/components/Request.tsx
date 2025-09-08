@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import holeService from "../services";
 import { type RequestObject } from "../types";
 
@@ -23,7 +23,7 @@ const Request = () => {
     <>
       <div className="prose p-5">
         <h1>
-          {hole_address} &gt;{" "}
+          <Link to={`/view/${hole_address}`}>{hole_address}</Link> &gt;{" "}
           {(request ?? { request_address: "" }).request_address}
         </h1>
         <p>This is a request.</p>
