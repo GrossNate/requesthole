@@ -63,6 +63,37 @@ function routes(fastify: FastifyInstance, options: RouteShorthandOptions) {
       }
     },
   );
+
+  fastify.get<{ Params: RequestParams }>(
+    "/api/request/:request_address/body",
+    { ...options, schema: { params } },
+    async (request, reply) => {
+      const { request_address } = request.params;
+      const client = await fastify.pg.connect();
+      try {
+        const { rows } = await client.query(
+          `SELECT headers, body FROM requests WHERE request_address = $1`,
+          [request_address],
+        );
+        if (rows.length < 1) {
+          reply.code(404);
+        } else {
+          const { body, headers } = rows[0] as {
+            body: Buffer | string;
+            headers: string;
+          };
+          const buffer = body instanceof Buffer ? body : Buffer.from(body);
+          const headersObject = JSON.parse(headers) as Partial<{
+            "content-type": string;
+          }>;
+          reply.header("content-type", headersObject["content-type"]);
+          reply.send(buffer);
+        }
+      } finally {
+        client.release();
+      }
+    },
+  );
 }
 
 export default routes;
