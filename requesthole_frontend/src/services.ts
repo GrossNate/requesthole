@@ -55,6 +55,11 @@ async function getRequest(requestAddress: string): Promise<RequestObject> {
   }
 }
 
+async function deleteRequest(requestAddress: string): Promise<boolean> {
+  const response = await axios.delete(`${BASE_URL}/api/request/${requestAddress}`);
+  return response.status === 204;
+}
+
 export default {
   addHole,
   getHoles,
@@ -62,5 +67,6 @@ export default {
   deleteHole,
   getRequests,
   getRequest,
+  deleteRequest,
   BASE_URL
 };

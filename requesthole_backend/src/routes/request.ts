@@ -47,8 +47,7 @@ function routes(fastify: FastifyInstance, options: RouteShorthandOptions) {
               method,
               request_path,
               query_params,
-              headers,
-              body
+              headers
             FROM requests
             WHERE request_address = $1
           `,

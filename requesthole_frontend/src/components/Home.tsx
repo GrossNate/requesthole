@@ -13,8 +13,8 @@ const Home: React.FC<HomeBlockProps> = ({ holes, setHoles, createHole }) => {
         .deleteHole(hole_address)
         .then((isDeleted) => {
           if (isDeleted) {
-            setHoles(
-              holes.filter((hole) => hole.hole_address !== hole_address),
+            setHoles((prevHoles) =>
+              prevHoles.filter((hole) => hole.hole_address !== hole_address),
             );
           }
         })

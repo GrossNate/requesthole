@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, type MouseEventHandler } from "react";
 import { useParams, Link } from "react-router-dom";
 import holeService from "../services";
 import { type RequestObject } from "../types";
@@ -32,6 +32,25 @@ const Hole = () => {
     };
   }, [hole_address]);
 
+  const handleDeleteRequest = (request_address: string) => {
+    const handler: MouseEventHandler = (event) => {
+      event.preventDefault();
+      holeService
+        .deleteRequest(request_address)
+        .then((isDeleted) => {
+          if (isDeleted) {
+            setHoleRequests((prevRequests) =>
+              prevRequests.filter(
+                (request) => request.request_address !== request_address,
+              ),
+            );
+          }
+        })
+        .catch((error) => console.error(error));
+    };
+    return handler;
+  };
+
   return (
     <div className="prose p-5">
       <h1>{hole_address}</h1>
@@ -41,6 +60,7 @@ const Hole = () => {
           <th>Path</th>
           <th>Params</th>
           <th>Created</th>
+          <th></th>
         </thead>
         <tbody>
           {holeRequests.map((request) => (
@@ -50,6 +70,14 @@ const Hole = () => {
                 <td>{request.request_path}</td>
                 <td>{request.headers}</td>
                 <td>{request.created}</td>
+                <td>
+                  <button
+                    className="btn btn-sm btn-error"
+                    onClick={handleDeleteRequest(request.request_address)}
+                  >
+                    delete
+                  </button>
+                </td>
               </tr>
             </Link>
           ))}
