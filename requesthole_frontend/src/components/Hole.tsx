@@ -64,30 +64,46 @@ const Hole = () => {
       </h1>
       <table className="table table-lg">
         <thead>
-          <th>Method</th>
-          <th>Path</th>
-          <th>Params</th>
-          <th>Created</th>
-          <th></th>
+          <tr>
+            <th>Method</th>
+            <th>Path</th>
+            <th>Params</th>
+            <th>Created</th>
+            <th></th>
+          </tr>
         </thead>
         <tbody>
           {holeRequests.map((request) => (
-            <Link to={`/view/${hole_address}/${request.request_address}`}>
-              <tr key={request.request_address}>
-                <td>{request.method}</td>
-                <td>{request.request_path}</td>
-                <td>{request.headers}</td>
-                <td>{request.created}</td>
-                <td>
-                  <button
-                    className="btn btn-sm btn-error"
-                    onClick={handleDeleteRequest(request.request_address)}
-                  >
-                    delete
-                  </button>
-                </td>
-              </tr>
-            </Link>
+            <tr key={request.request_address}>
+              <td>
+                <Link to={`/view/${hole_address}/${request.request_address}`}>
+                  {request.method}
+                </Link>
+              </td>
+              <td>
+                <Link to={`/view/${hole_address}/${request.request_address}`}>
+                  {request.request_path}
+                </Link>
+              </td>
+              <td>
+                <Link to={`/view/${hole_address}/${request.request_address}`}>
+                  {request.headers}
+                </Link>
+              </td>
+              <td>
+                <Link to={`/view/${hole_address}/${request.request_address}`}>
+                  {request.created}
+                </Link>
+              </td>
+              <td>
+                <button
+                  className="btn btn-sm btn-error"
+                  onClick={handleDeleteRequest(request.request_address)}
+                >
+                  delete
+                </button>
+              </td>
+            </tr>
           ))}
         </tbody>
       </table>
