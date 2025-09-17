@@ -100,7 +100,6 @@ function routesWrapper(requestBroadcaster: RequestBroadcaster) {
       "/api/hole/:hole_address/events",
       { ...options, schema: { params } },
       (request, reply) => {
-        reply.header("Access-Control-Allow-Origin", "*"); // TODO(GrossNate): remove in production
         const { hole_address } = request.params;
         requestBroadcaster.addClient(hole_address, reply);
         request.socket.on("close", () => {
