@@ -4,10 +4,11 @@ import Home from "./components/Home";
 import Hole from "./components/Hole";
 import Request from "./components/Request";
 import { type holeObject } from "./types";
-import { Routes, Route, Link } from "react-router-dom";
+import { Routes, Route, Link, useNavigate } from "react-router-dom";
 
 function App() {
   const [holes, setHoles] = useState<holeObject[]>([]);
+  const navigate = useNavigate();
 
   useEffect(() => {
     holeService
@@ -20,7 +21,11 @@ function App() {
 
   const createHole = async () => {
     const result = await holeService.addHole();
-    setHoles((prevHoles) => [...prevHoles, {hole_address: result[0].hole_address}]);
+    setHoles((prevHoles) => [
+      ...prevHoles,
+      { hole_address: result[0].hole_address },
+    ]);
+    navigate(`/view/${result[0].hole_address}`);
   };
 
   return (
