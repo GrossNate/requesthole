@@ -19,6 +19,23 @@ const Request = () => {
     refreshRequest();
   }, [request_address]);
 
+  const RequestHeaders = ({ headers }) => {
+    const headerKeys = Object.keys(headers);
+
+    return (
+      <table>
+        <tbody>
+          {headerKeys.map((key) => (
+            <tr key={key}>
+              <th>{key}</th>
+              <td>{headers[key]}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    );
+  };
+
   return (
     <>
       <div className="prose p-5">
@@ -26,7 +43,10 @@ const Request = () => {
           <Link to={`/view/${hole_address}`}>{hole_address}</Link> &gt;{" "}
           {(request ?? { request_address: "" }).request_address}
         </h1>
-        <p>This is a request.</p>
+        <p>
+          {request?.method} {request?.request_path}
+        </p>
+        <RequestHeaders headers={JSON.parse(request?.headers ?? "{}")} />
       </div>
     </>
   );
