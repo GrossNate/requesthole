@@ -6,6 +6,7 @@ import { type RequestObject } from "../types";
 const Hole = () => {
   const [holeRequests, setHoleRequests] = useState<RequestObject[]>([]);
   const { hole_address } = useParams();
+  const holeFullUrl = `${holeService.BASE_URL}/${hole_address}`;
 
   useEffect(() => {
     const refreshHole = () => {
@@ -32,6 +33,10 @@ const Hole = () => {
     };
   }, [hole_address]);
 
+  const copyTextToClipboard = async (text: string) => {
+    void (await navigator.clipboard.writeText(text));
+  };
+
   const handleDeleteRequest = (request_address: string) => {
     const handler: MouseEventHandler = (event) => {
       event.preventDefault();
@@ -53,7 +58,10 @@ const Hole = () => {
 
   return (
     <div className="prose p-5">
-      <h1>{hole_address}</h1>
+      <h1>
+        {holeFullUrl}{" "}
+        <button onClick={() => copyTextToClipboard(holeFullUrl)}>⿻</button>
+      </h1>
       <table className="table table-lg">
         <thead>
           <th>Method</th>
