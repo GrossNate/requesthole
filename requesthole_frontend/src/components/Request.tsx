@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { Link, useParams } from "react-router-dom";
 import holeService from "../services";
-import { type RequestObject } from "../types";
+import { type RequestObject, type RequestHeadersObject } from "../types";
 
 const Request = () => {
   const [request, setRequest] = useState<RequestObject>();
@@ -12,14 +12,15 @@ const Request = () => {
       holeService
         .getRequest(request_address ?? "")
         .then((requestData) => {
-          setRequest(requestData);
+          const requestHeadersObject = JSON.parse(requestData.headers);
+          setRequest({ ...requestData, headersObject: requestHeadersObject });
         })
         .catch((error) => console.error(error));
     };
     refreshRequest();
   }, [request_address]);
 
-  const RequestHeaders = ({ headers }) => {
+  const RequestHeaders = ({ headers }: { headers: RequestHeadersObject }) => {
     const headerKeys = Object.keys(headers);
 
     return (
@@ -36,6 +37,84 @@ const Request = () => {
     );
   };
 
+  const RequestBody = () => {
+    const [requestBody, setRequestBody] = useState<Buffer>();
+    if (
+      request &&
+      typeof request.headersObject === "object" &&
+      request.headersObject["content-type"]
+    ) {
+      // image/png
+      // image/jpeg
+      // image/svg+xml
+      // image/gif
+
+      // text/plain
+
+      // text/html
+      // application/json
+      // application/xml
+      // application/javascript
+      // multipart/form-data; boundary=--------------------------740515865934547368323480
+      // application/x-www-form-urlencoded
+
+      // application/pdf
+      if (/image\//.test(request.headersObject["content-type"])) {
+        return (
+          <>
+            <h2>Body</h2>
+            <img
+              src={`${holeService.BASE_URL}/api/request/${request_address}/body`}
+            />
+          </>
+        );
+      }
+      if (
+        /(text\/)|(application\/xml)|(application\/javascript)/.test(
+          request.headersObject["content-type"],
+        )
+      ) {
+        holeService
+          .getBody(request_address ?? "")
+          .then((data) => setRequestBody(data));
+        return (
+          <>
+            <h2>Body</h2>
+            <div>{requestBody}</div>
+          </>
+        );
+      }
+      if (/application\/json/.test(request.headersObject["content-type"])) {
+        holeService
+          .getBody(request_address ?? "")
+          .then((data) => setRequestBody(data));
+        return (
+          <>
+            <h2>Body</h2>
+            <div>{JSON.stringify(requestBody)}</div>
+          </>
+        );
+      }
+      if (/application\/pdf/.test(request.headersObject["content-type"])) {
+        return (
+          <>
+            <h2>Body</h2>
+            <div>
+              <Link
+                to={`${holeService.BASE_URL}/api/request/${request_address}/body`}
+                target="_blank"
+              >
+                📄 PDF
+              </Link>
+            </div>
+          </>
+        );
+      }
+    } else {
+      return;
+    }
+  };
+
   return (
     <>
       <div className="prose p-5">
@@ -46,7 +125,8 @@ const Request = () => {
         <p>
           {request?.method} {request?.request_path}
         </p>
-        <RequestHeaders headers={JSON.parse(request?.headers ?? "{}")} />
+        <RequestHeaders headers={request?.headersObject ?? {}} />
+        <RequestBody />
       </div>
     </>
   );

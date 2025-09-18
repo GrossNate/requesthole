@@ -56,8 +56,21 @@ async function getRequest(requestAddress: string): Promise<RequestObject> {
 }
 
 async function deleteRequest(requestAddress: string): Promise<boolean> {
-  const response = await axios.delete(`${BASE_URL}/api/request/${requestAddress}`);
+  const response = await axios.delete(
+    `${BASE_URL}/api/request/${requestAddress}`,
+  );
   return response.status === 204;
+}
+
+async function getBody(requestAddress: string) {
+  const response = await axios.get(
+    `${BASE_URL}/api/request/${requestAddress}/body`,
+  );
+  if (response.status === 200) {
+    return response.data;
+  } else {
+    throw new Error("Failed to get request body.");
+  }
 }
 
 export default {
@@ -68,5 +81,6 @@ export default {
   getRequests,
   getRequest,
   deleteRequest,
-  BASE_URL
+  getBody,
+  BASE_URL,
 };
