@@ -64,11 +64,18 @@ const Home: React.FC<HomeBlockProps> = ({ holes, setHoles, createHole }) => {
   };
 
   return (
-    <div className="p-5">
-      <button onClick={handleCreateHole} className="btn btn-secondary">
-        create hole
-      </button>
-      {maybeHoleList()}
+    <div className="prose p-5">
+      <div className="breadcrumbs text-sm">
+        <ul>
+          <li>All holes</li>
+        </ul>
+      </div>
+      <div className="p-5">
+        <button onClick={handleCreateHole} className="btn btn-secondary">
+          create hole
+        </button>
+        {maybeHoleList()}
+      </div>
     </div>
   );
 };

@@ -24,7 +24,7 @@ const Request = () => {
     const headerKeys = Object.keys(headers);
 
     return (
-      <table>
+      <table className="table table-zebra">
         <tbody>
           {headerKeys.map((key) => (
             <tr key={key}>
@@ -70,7 +70,7 @@ const Request = () => {
         );
       }
       if (
-        /(text\/)|(application\/xml)|(application\/javascript)/.test(
+        /(text\/)|(application\/xml)|(application\/javascript)|(multipart\/form-data)|(application\/x-www-form-urlencoded)/.test(
           request.headersObject["content-type"],
         )
       ) {
@@ -118,10 +118,20 @@ const Request = () => {
   return (
     <>
       <div className="prose p-5">
-        <h1>
-          <Link to={`/view/${hole_address}`}>{hole_address}</Link> &gt;{" "}
-          {(request ?? { request_address: "" }).request_address}
-        </h1>
+        <div className="breadcrumbs text-sm">
+          <ul>
+            <li>
+              <Link to="/">All holes</Link>
+            </li>
+            <li>
+              <Link to={`/view/${hole_address}`}>Hole {hole_address}</Link>
+            </li>
+            <li>
+              Request {(request ?? { request_address: "" }).request_address}
+            </li>
+          </ul>
+        </div>
+        <h1>{(request ?? { request_address: "" }).request_address}</h1>
         <p>
           {request?.method} {request?.request_path}
         </p>

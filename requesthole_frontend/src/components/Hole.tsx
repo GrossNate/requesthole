@@ -58,6 +58,14 @@ const Hole = () => {
 
   return (
     <div className="prose p-5">
+      <div className="breadcrumbs text-sm">
+        <ul>
+          <li>
+            <Link to="/">All holes</Link>
+          </li>
+          <li>Hole {hole_address}</li>
+        </ul>
+      </div>
       <h1>
         {holeFullUrl}{" "}
         <button onClick={() => copyTextToClipboard(holeFullUrl)}>⿻</button>
