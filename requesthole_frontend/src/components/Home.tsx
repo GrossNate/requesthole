@@ -27,16 +27,18 @@ const Home: React.FC<HomeBlockProps> = ({ holes, setHoles, createHole }) => {
     if (holes.length === 0) return null;
 
     return (
-      <table className="table table-lg">
-        <thead>
-          <tr>
-            <th colSpan={2} className="text-xl">
-              Holes
-            </th>
-          </tr>
-        </thead>
-        <tbody>{allHoles()}</tbody>
-      </table>
+      <div className="h-full overflow-y-auto pb-16">
+        <table className="table table-lg table-pin-rows">
+          <thead>
+            <tr>
+              <th colSpan={2} className="text-xl">
+                Holes
+              </th>
+            </tr>
+          </thead>
+          <tbody>{allHoles()}</tbody>
+        </table>
+      </div>
     );
   };
 
@@ -64,19 +66,17 @@ const Home: React.FC<HomeBlockProps> = ({ holes, setHoles, createHole }) => {
   };
 
   return (
-    <div className="prose p-5">
+    <>
       <div className="breadcrumbs text-sm">
         <ul>
           <li>All holes</li>
         </ul>
       </div>
-      <div className="p-5">
-        <button onClick={handleCreateHole} className="btn btn-secondary">
-          create hole
-        </button>
-        {maybeHoleList()}
-      </div>
-    </div>
+      <button onClick={handleCreateHole} className="btn btn-secondary">
+        create hole
+      </button>
+      {maybeHoleList()}
+    </>
   );
 };
 

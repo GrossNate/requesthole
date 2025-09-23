@@ -117,24 +117,24 @@ const Request = () => {
 
   return (
     <>
-      <div className="prose p-5">
-        <div className="breadcrumbs text-sm">
-          <ul>
-            <li>
-              <Link to="/">All holes</Link>
-            </li>
-            <li>
-              <Link to={`/view/${hole_address}`}>Hole {hole_address}</Link>
-            </li>
-            <li>
-              Request {(request ?? { request_address: "" }).request_address}
-            </li>
-          </ul>
-        </div>
-        <h1>{(request ?? { request_address: "" }).request_address}</h1>
-        <p>
-          {request?.method} {request?.request_path}
-        </p>
+      <div className="breadcrumbs text-sm">
+        <ul>
+          <li>
+            <Link to="/">All holes</Link>
+          </li>
+          <li>
+            <Link to={`/view/${hole_address}`}>Hole {hole_address}</Link>
+          </li>
+          <li>
+            Request {(request ?? { request_address: "" }).request_address}
+          </li>
+        </ul>
+      </div>
+      <h1>{(request ?? { request_address: "" }).request_address}</h1>
+      <p>
+        {request?.method} {request?.request_path}
+      </p>
+      <div className="h-full overflow-y-auto pb-16">
         <RequestHeaders headers={request?.headersObject ?? {}} />
         <RequestBody />
       </div>

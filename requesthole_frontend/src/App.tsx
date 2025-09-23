@@ -29,50 +29,54 @@ function App() {
   };
 
   return (
-    <>
-      <div className="navbar bg-base-100">
-        <div className="flex-1">
-          <h1 className="text-xl">
-            <img src="favicon.png"></img>
-            RequestHole
-          </h1>
+    <div className="h-screen flex flex-col overflow-hidden">
+      <header className="h-20">
+        <div className="navbar bg-base-100">
+          <div className="flex-1">
+            <h1 className="text-xl">
+              <img src="favicon.png" className="max-h-10"></img>
+              RequestHole
+            </h1>
+          </div>
+          <div className="flex-none z-50">
+            <ul className="menu menu-horizontal px-1">
+              <li>
+                <Link to="/">Home</Link>
+              </li>
+              <li>
+                <details>
+                  <summary>Holes</summary>
+                  <ul className="bg-base-100 rounded-t-none p-2">
+                    {holes.map((hole) => (
+                      <li key={hole.hole_address}>
+                        <Link to={`/view/${hole.hole_address}`}>
+                          {hole.hole_address}
+                        </Link>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              </li>
+            </ul>
+          </div>
         </div>
-        <div className="flex-none z-50">
-          <ul className="menu menu-horizontal px-1">
-            <li>
-              <Link to="/">Home</Link>
-            </li>
-            <li>
-              <details>
-                <summary>Holes</summary>
-                <ul className="bg-base-100 rounded-t-none p-2">
-                  {holes.map((hole) => (
-                    <li key={hole.hole_address}>
-                      <Link to={`/view/${hole.hole_address}`}>
-                        {hole.hole_address}
-                      </Link>
-                    </li>
-                  ))}
-                </ul>
-              </details>
-            </li>
-          </ul>
-        </div>
-      </div>
-      <Routes>
-        <Route path="/view/:hole_address" element={<Hole />} />
-        <Route
-          path="/"
-          element={
-            <Home holes={holes} setHoles={setHoles} createHole={createHole} />
-          }
-        />
-        <Route
-          path="/view/:hole_address/:request_address"
-          element={<Request />}
-        />
-      </Routes>
-    </>
+      </header>
+      <main className="flex-1 min-h-0">
+        <Routes>
+          <Route path="/view/:hole_address" element={<Hole />} />
+          <Route
+            path="/"
+            element={
+              <Home holes={holes} setHoles={setHoles} createHole={createHole} />
+            }
+          />
+          <Route
+            path="/view/:hole_address/:request_address"
+            element={<Request />}
+          />
+        </Routes>
+      </main>
+    </div>
   );
 }
 

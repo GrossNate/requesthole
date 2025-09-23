@@ -57,7 +57,7 @@ const Hole = () => {
   };
 
   return (
-    <div className="prose p-5">
+    <>
       <div className="breadcrumbs text-sm">
         <ul>
           <li>
@@ -70,52 +70,54 @@ const Hole = () => {
         {holeFullUrl}{" "}
         <button onClick={() => copyTextToClipboard(holeFullUrl)}>⿻</button>
       </h1>
-      <table className="table table-lg">
-        <thead>
-          <tr>
-            <th>Method</th>
-            <th>Path</th>
-            <th>Params</th>
-            <th>Created</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {holeRequests.map((request) => (
-            <tr key={request.request_address}>
-              <td>
-                <Link to={`/view/${hole_address}/${request.request_address}`}>
-                  {request.method}
-                </Link>
-              </td>
-              <td>
-                <Link to={`/view/${hole_address}/${request.request_address}`}>
-                  {request.request_path}
-                </Link>
-              </td>
-              <td>
-                <Link to={`/view/${hole_address}/${request.request_address}`}>
-                  {request.headers}
-                </Link>
-              </td>
-              <td>
-                <Link to={`/view/${hole_address}/${request.request_address}`}>
-                  {request.created}
-                </Link>
-              </td>
-              <td>
-                <button
-                  className="btn btn-sm btn-error"
-                  onClick={handleDeleteRequest(request.request_address)}
-                >
-                  delete
-                </button>
-              </td>
+      <div className="h-full overflow-y-auto pb-16">
+        <table className="table table-md table-zebra table-pin-rows w-full">
+          <thead>
+            <tr>
+              <td>Method</td>
+              <td>Path</td>
+              <td>Params</td>
+              <td>Created</td>
+              <td></td>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {holeRequests.map((request) => (
+              <tr key={request.request_address}>
+                <td>
+                  <Link to={`/view/${hole_address}/${request.request_address}`}>
+                    {request.method}
+                  </Link>
+                </td>
+                <td>
+                  <Link to={`/view/${hole_address}/${request.request_address}`}>
+                    {request.request_path}
+                  </Link>
+                </td>
+                <td>
+                  <Link to={`/view/${hole_address}/${request.request_address}`}>
+                    {request.headers}
+                  </Link>
+                </td>
+                <td>
+                  <Link to={`/view/${hole_address}/${request.request_address}`}>
+                    {request.created}
+                  </Link>
+                </td>
+                <td>
+                  <button
+                    className="btn btn-sm btn-error"
+                    onClick={handleDeleteRequest(request.request_address)}
+                  >
+                    delete
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 };
 
