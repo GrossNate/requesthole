@@ -32,32 +32,41 @@ function App() {
     <div className="h-screen flex flex-col overflow-hidden">
       <header className="h-20">
         <div className="navbar bg-base-100">
-          <div className="flex-1">
+          <div className="ps-3">
             <h1 className="text-xl">
               <img src="favicon.png" className="max-h-10"></img>
-              RequestHole
             </h1>
           </div>
-          <div className="flex-none z-50">
-            <ul className="menu menu-horizontal px-1">
-              <li>
+          <div className="ps-3">
+            <h1 className="text-xl">RequestHole</h1>
+          </div>
+          <div className="flex grow justify-end px-2">
+            <div className="flex items-stretch">
+              <div className="btn btn-ghost rounded-field">
                 <Link to="/">Home</Link>
-              </li>
-              <li>
-                <details>
-                  <summary>Holes</summary>
-                  <ul className="bg-base-100 rounded-t-none p-2">
-                    {holes.map((hole) => (
-                      <li key={hole.hole_address}>
-                        <Link to={`/view/${hole.hole_address}`}>
-                          {hole.hole_address}
-                        </Link>
-                      </li>
-                    ))}
-                  </ul>
-                </details>
-              </li>
-            </ul>
+              </div>
+              <div className="dropdown dropdown-hover">
+                <div
+                  tabIndex={0}
+                  role="button"
+                  className="btn btn-ghost rounded-field"
+                >
+                  Holes
+                </div>
+                <ul
+                  tabIndex={0}
+                  className="menu dropdown-content bg-base-200 rounded-box z-1 w-52 shadow-sm"
+                >
+                  {holes.map((hole) => (
+                    <li key={hole.hole_address}>
+                      <Link to={`/view/${hole.hole_address}`}>
+                        {hole.hole_address}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
           </div>
         </div>
       </header>

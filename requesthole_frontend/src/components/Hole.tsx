@@ -61,9 +61,15 @@ const Hole = () => {
       <div className="breadcrumbs text-sm">
         <ul>
           <li>
-            <Link to="/">All holes</Link>
+            <Link to="/" className="btn btn-ghost">
+              All holes
+            </Link>
           </li>
-          <li>Hole {hole_address}</li>
+          <li>
+            <div className="btn btn-ghost btn-disabled">
+              Hole {hole_address}
+            </div>
+          </li>
         </ul>
       </div>
       <h1>

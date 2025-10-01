@@ -69,7 +69,9 @@ const Home: React.FC<HomeBlockProps> = ({ holes, setHoles, createHole }) => {
     <>
       <div className="breadcrumbs text-sm">
         <ul>
-          <li>All holes</li>
+          <li>
+            <div className="btn btn-ghost btn-disabled">All holes</div>
+          </li>
         </ul>
       </div>
       <button onClick={handleCreateHole} className="btn btn-secondary">

@@ -120,13 +120,19 @@ const Request = () => {
       <div className="breadcrumbs text-sm">
         <ul>
           <li>
-            <Link to="/">All holes</Link>
+            <Link to="/" className="btn btn-ghost">
+              All holes
+            </Link>
           </li>
           <li>
-            <Link to={`/view/${hole_address}`}>Hole {hole_address}</Link>
+            <Link to={`/view/${hole_address}`} className="btn btn-ghost">
+              Hole {hole_address}
+            </Link>
           </li>
           <li>
-            Request {(request ?? { request_address: "" }).request_address}
+            <div className="btn btn-ghost btn-disabled">
+              Request {(request ?? { request_address: "" }).request_address}
+            </div>
           </li>
         </ul>
       </div>
