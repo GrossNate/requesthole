@@ -34,7 +34,7 @@ function App() {
         <div className="navbar bg-base-100">
           <div className="ps-3">
             <h1 className="text-xl">
-              <img src="favicon.png" className="max-h-10"></img>
+              <img src="/favicon.png" className="max-h-10"></img>
             </h1>
           </div>
           <div className="ps-3">
@@ -70,7 +70,7 @@ function App() {
           </div>
         </div>
       </header>
-      <main className="flex-1 min-h-0">
+      <main className="flex-1 min-h-0 p-3">
         <Routes>
           <Route path="/view/:hole_address" element={<Hole />} />
           <Route

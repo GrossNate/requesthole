@@ -61,12 +61,12 @@ const Request = () => {
       // application/pdf
       if (/image\//.test(request.headersObject["content-type"])) {
         return (
-          <>
+          <div className="p-3">
             <h2>Body</h2>
             <img
               src={`${holeService.BASE_URL}/api/request/${request_address}/body`}
             />
-          </>
+          </div>
         );
       }
       if (
@@ -78,10 +78,10 @@ const Request = () => {
           .getBody(request_address ?? "")
           .then((data) => setRequestBody(data));
         return (
-          <>
+          <div className="p-3">
             <h2>Body</h2>
             <div>{requestBody}</div>
-          </>
+          </div>
         );
       }
       if (/application\/json/.test(request.headersObject["content-type"])) {
@@ -89,15 +89,15 @@ const Request = () => {
           .getBody(request_address ?? "")
           .then((data) => setRequestBody(data));
         return (
-          <>
+          <div className="p-3">
             <h2>Body</h2>
             <div>{JSON.stringify(requestBody)}</div>
-          </>
+          </div>
         );
       }
       if (/application\/pdf/.test(request.headersObject["content-type"])) {
         return (
-          <>
+          <div className="p-3">
             <h2>Body</h2>
             <div>
               <Link
@@ -107,7 +107,7 @@ const Request = () => {
                 📄 PDF
               </Link>
             </div>
-          </>
+          </div>
         );
       }
     } else {
@@ -136,10 +136,9 @@ const Request = () => {
           </li>
         </ul>
       </div>
-      <h1>{(request ?? { request_address: "" }).request_address}</h1>
-      <p>
+      <h1 className="pl-3">
         {request?.method} {request?.request_path}
-      </p>
+      </h1>
       <div className="h-full overflow-y-auto pb-16">
         <RequestHeaders headers={request?.headersObject ?? {}} />
         <RequestBody />

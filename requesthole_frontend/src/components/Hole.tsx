@@ -72,7 +72,7 @@ const Hole = () => {
           </li>
         </ul>
       </div>
-      <h1>
+      <h1 className="pl-3">
         {holeFullUrl}{" "}
         <button onClick={() => copyTextToClipboard(holeFullUrl)}>⿻</button>
       </h1>
