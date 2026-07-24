@@ -1,28 +1,23 @@
-import fp from "fastify-plugin";
-import { FastifyInstance } from "fastify";
+import Database from "better-sqlite3";
 
-export default fp(
-  async (fastify: FastifyInstance) => {
-    await fastify.pg.query(`
-      CREATE TABLE IF NOT EXISTS holes (
-        hole_id bigint PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
-        hole_address text NOT NULL,
-        created timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP
-      );
+export default function initSchema(db: Database.Database) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS holes (
+      hole_id INTEGER PRIMARY KEY,
+      hole_address TEXT NOT NULL,
+      created TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+    );
 
-      CREATE TABLE IF NOT EXISTS requests (
-        request_id bigint PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
-        request_address text NOT NULL,
-        hole_id bigint NOT NULL REFERENCES holes (hole_id) ON DELETE CASCADE,
-        created timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        method text NOT NULL,
-        request_path text NOT NULL,
-        query_params text,
-        headers text,
-        body bytea
-      );
-    `);
-    fastify.log.info("Database schema initialized");
-  },
-  { name: "db-init", dependencies: ["@fastify/postgres"] },
-);
+    CREATE TABLE IF NOT EXISTS requests (
+      request_id INTEGER PRIMARY KEY,
+      request_address TEXT NOT NULL,
+      hole_id INTEGER NOT NULL REFERENCES holes (hole_id) ON DELETE CASCADE,
+      created TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      method TEXT NOT NULL,
+      request_path TEXT NOT NULL,
+      query_params TEXT,
+      headers TEXT,
+      body BLOB
+    );
+  `);
+}

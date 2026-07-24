@@ -10,13 +10,15 @@
 #   * GET  /                    -> serves the SPA index.html
 #   * a hashed static asset      -> loads with 200
 #   * GET /api/hole/:addr/events -> streams a `data:` SSE event on capture
+#   * compose down / up          -> holes survive a restart (the /data volume,
+#                                   WAL sidecars included)
 #
 # Usage:
 #   scripts/smoke-test.sh            # up --build, run checks, leave stack running
 #   scripts/smoke-test.sh --down     # additionally `compose down` at the end
 #   scripts/smoke-test.sh --no-build # skip the image rebuild (reuse running stack)
 #
-# Requires a running Docker daemon and a populated .env.docker.
+# Requires a running Docker daemon.
 set -uo pipefail
 
 cd "$(dirname "$0")/.."
@@ -46,11 +48,6 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
-
-if [ ! -f .env.docker ]; then
-  echo "ERROR: .env.docker not found. Copy .env.docker.example to .env.docker first." >&2
-  exit 2
-fi
 
 echo "=== bringing up the stack ==="
 if [ "$DO_BUILD" -eq 1 ]; then
@@ -160,6 +157,31 @@ if [ -n "$addr" ]; then
   rm -f "$sse_out"
 else
   fail "SSE check — skipped, no address"
+fi
+
+# 8) Data survives a stack restart (SQLite /data volume, no -v so it persists).
+if [ -n "$addr" ]; then
+  echo "--- restarting stack to check persistence ---"
+  docker compose down
+  docker compose up -d
+  restart_ready=0
+  for _ in $(seq 1 60); do
+    code=$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/api/holes" || true)
+    if [ "$code" = "200" ]; then restart_ready=1; break; fi
+    sleep 2
+  done
+  if [ "$restart_ready" -ne 1 ]; then
+    fail "persistence — stack never came back after down/up"
+  else
+    holes_after=$(curl -s "${BASE}/api/holes")
+    if printf '%s' "$holes_after" | grep -q "\"$addr\""; then
+      pass "hole ${addr} survived docker compose down/up"
+    else
+      fail "hole ${addr} lost after down/up (body: ${holes_after})"
+    fi
+  fi
+else
+  fail "persistence check — skipped, no address"
 fi
 
 echo "=== summary: ${PASS} passed, ${FAIL} failed ==="

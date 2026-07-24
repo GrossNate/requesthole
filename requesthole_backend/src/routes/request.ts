@@ -19,16 +19,10 @@ function routes(fastify: FastifyInstance, options: RouteShorthandOptions) {
     { ...options, schema: { params } },
     async (request, reply) => {
       const { request_address } = request.params;
-      const client = await fastify.pg.connect();
-      try {
-        const { rowCount } = await client.query(
-          "DELETE FROM requests WHERE request_address = $1;",
-          [request_address],
-        );
-        reply.code((rowCount ?? 0) > 0 ? 204 : 404);
-      } finally {
-        client.release();
-      }
+      const { changes } = fastify.db
+        .prepare("DELETE FROM requests WHERE request_address = ?;")
+        .run(request_address);
+      reply.code(changes > 0 ? 204 : 404);
     },
   );
 
@@ -37,9 +31,8 @@ function routes(fastify: FastifyInstance, options: RouteShorthandOptions) {
     { ...options, schema: { params } },
     async (request, reply) => {
       const { request_address } = request.params;
-      const client = await fastify.pg.connect();
-      try {
-        const { rows } = await client.query(
+      const row = fastify.db
+        .prepare(
           `
             SELECT
               request_address,
@@ -49,17 +42,14 @@ function routes(fastify: FastifyInstance, options: RouteShorthandOptions) {
               query_params,
               headers
             FROM requests
-            WHERE request_address = $1
+            WHERE request_address = ?
           `,
-          [request_address],
-        );
-        if (rows.length < 1) {
-          reply.code(404);
-        } else {
-          reply.send(rows[0]);
-        }
-      } finally {
-        client.release();
+        )
+        .get(request_address);
+      if (row === undefined) {
+        reply.code(404);
+      } else {
+        reply.send(row);
       }
     },
   );
@@ -69,28 +59,24 @@ function routes(fastify: FastifyInstance, options: RouteShorthandOptions) {
     { ...options, schema: { params } },
     async (request, reply) => {
       const { request_address } = request.params;
-      const client = await fastify.pg.connect();
-      try {
-        const { rows } = await client.query(
-          `SELECT headers, body FROM requests WHERE request_address = $1`,
-          [request_address],
-        );
-        if (rows.length < 1) {
-          reply.code(404);
-        } else {
-          const { body, headers } = rows[0] as {
-            body: Buffer | string;
-            headers: string;
-          };
-          const buffer = body instanceof Buffer ? body : Buffer.from(body);
-          const headersObject = JSON.parse(headers) as Partial<{
-            "content-type": string;
-          }>;
-          reply.header("content-type", headersObject["content-type"]);
-          reply.send(buffer);
-        }
-      } finally {
-        client.release();
+      const row = fastify.db
+        .prepare(
+          `SELECT headers, body FROM requests WHERE request_address = ?`,
+        )
+        .get(request_address);
+      if (row === undefined) {
+        reply.code(404);
+      } else {
+        const { body, headers } = row as {
+          body: Buffer | string;
+          headers: string;
+        };
+        const buffer = body instanceof Buffer ? body : Buffer.from(body);
+        const headersObject = JSON.parse(headers) as Partial<{
+          "content-type": string;
+        }>;
+        reply.header("content-type", headersObject["content-type"]);
+        reply.send(buffer);
       }
     },
   );

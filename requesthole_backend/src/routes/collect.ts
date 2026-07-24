@@ -36,33 +36,32 @@ function routesWrapper(requestBroadcaster: RequestBroadcaster) {
       async (request, reply) => {
         fastify.log.info("called collection route");
         const { hole_address } = request.params;
-        const client = await fastify.pg.connect();
-        try {
-          const result = await client.query<{ hole_id: string }>(
-            "SELECT hole_id FROM holes WHERE hole_address = $1",
-            [hole_address],
-          );
-          if (!result.rows[0] || (result.rowCount && result.rowCount < 1)) {
-            reply.code(404);
-          } else {
-            const newRequestAddress = generateAddress();
-            await client.query(
+        const hole = fastify.db
+          .prepare("SELECT hole_id FROM holes WHERE hole_address = ?")
+          .get(hole_address) as { hole_id: number } | undefined;
+        if (!hole) {
+          reply.code(404);
+        } else {
+          const newRequestAddress = generateAddress();
+          fastify.db
+            .prepare(
               `
               INSERT INTO requests
                 (hole_id, request_address, method, request_path, query_params,
                   headers, body)
-              VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-              [
-                result.rows[0].hole_id,
-                newRequestAddress,
-                request.method,
-                request.url,
-                request.params,
-                request.headers,
-                request.body,
-              ],
+              VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            )
+            .run(
+              hole.hole_id,
+              newRequestAddress,
+              request.method,
+              request.url,
+              JSON.stringify(request.params),
+              JSON.stringify(request.headers),
+              (request.body as Buffer | undefined) ?? null,
             );
-            const { rows } = await client.query(
+          const row = fastify.db
+            .prepare(
               `
                 SELECT
                   request_address,
@@ -72,23 +71,17 @@ function routesWrapper(requestBroadcaster: RequestBroadcaster) {
                   query_params,
                   headers
                 FROM requests
-                WHERE request_address = $1
+                WHERE request_address = ?
               `,
-              [newRequestAddress],
-            );
-            const parseResult = RequestSansBody.safeParse(rows[0]);
-            if (!parseResult.success) {
-              fastify.log.error(parseResult.error);
-            } else {
-              requestBroadcaster.broadcastRequest(
-                hole_address,
-                parseResult.data,
-              );
-            }
-            reply.code(200);
+            )
+            .get(newRequestAddress);
+          const parseResult = RequestSansBody.safeParse(row);
+          if (!parseResult.success) {
+            fastify.log.error(parseResult.error);
+          } else {
+            requestBroadcaster.broadcastRequest(hole_address, parseResult.data);
           }
-        } finally {
-          client.release();
+          reply.code(200);
         }
       },
     );

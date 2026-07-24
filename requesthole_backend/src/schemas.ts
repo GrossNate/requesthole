@@ -2,7 +2,7 @@ import * as z from "zod";
 
 const RequestSansBody = z.object({
   request_address: z.string(),
-  created: z.date(),
+  created: z.string(),
   method: z.string(),
   request_path: z.string(),
   query_params: z.string(),

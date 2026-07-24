@@ -22,31 +22,23 @@ function routesWrapper(requestBroadcaster: RequestBroadcaster) {
       { ...options, schema: { params } },
       async (request, reply) => {
         const { hole_address } = request.params;
-        const client = await fastify.pg.connect();
-        try {
-          const { rows } = await client.query(
-            "SELECT hole_address, created FROM holes WHERE hole_address = $1;",
-            [hole_address],
-          );
-          reply.send(rows);
-        } finally {
-          client.release();
-        }
+        const rows = fastify.db
+          .prepare(
+            "SELECT hole_address, created FROM holes WHERE hole_address = ?;",
+          )
+          .all(hole_address);
+        reply.send(rows);
       },
     );
 
     fastify.post("/api/hole", options, async (_, reply) => {
-      const client = await fastify.pg.connect();
-      try {
-        const { rows } = await client.query(
-          "INSERT INTO holes (hole_address) VALUES ($1) RETURNING created, hole_address;",
-          [generateAddress()],
-        );
-        reply.code(201);
-        reply.send(rows);
-      } finally {
-        client.release();
-      }
+      const row = fastify.db
+        .prepare(
+          "INSERT INTO holes (hole_address) VALUES (?) RETURNING created, hole_address;",
+        )
+        .get(generateAddress());
+      reply.code(201);
+      reply.send([row]);
     });
 
     fastify.delete<{ Params: HoleParams }>(
@@ -54,16 +46,10 @@ function routesWrapper(requestBroadcaster: RequestBroadcaster) {
       { ...options, schema: { params } },
       async (request, reply) => {
         const { hole_address } = request.params;
-        const client = await fastify.pg.connect();
-        try {
-          const { rowCount } = await client.query(
-            "DELETE FROM holes WHERE hole_address = $1;",
-            [hole_address],
-          );
-          reply.code((rowCount ?? 0) > 0 ? 204 : 404);
-        } finally {
-          client.release();
-        }
+        const { changes } = fastify.db
+          .prepare("DELETE FROM holes WHERE hole_address = ?;")
+          .run(hole_address);
+        reply.code(changes > 0 ? 204 : 404);
       },
     );
 
@@ -72,9 +58,8 @@ function routesWrapper(requestBroadcaster: RequestBroadcaster) {
       { ...options, schema: { params } },
       async (request, reply) => {
         const { hole_address } = request.params;
-        const client = await fastify.pg.connect();
-        try {
-          const { rows } = await client.query(
+        const rows = fastify.db
+          .prepare(
             `
             SELECT
               request_address,
@@ -85,14 +70,11 @@ function routesWrapper(requestBroadcaster: RequestBroadcaster) {
               headers
             FROM holes AS h
             INNER JOIN requests AS r USING (hole_id)
-            WHERE hole_address = $1
+            WHERE hole_address = ?
           `,
-            [hole_address],
-          );
-          reply.send(rows);
-        } finally {
-          client.release();
-        }
+          )
+          .all(hole_address);
+        reply.send(rows);
       },
     );
 
