@@ -11,7 +11,7 @@ interface HoleParams {
 const params: JSONSchemaType<HoleParams> = {
   type: "object",
   properties: {
-    hole_address: { type: "string", pattern: "^[a-zA-Z0-9]{5,6}$" },
+    hole_address: { type: "string", pattern: "^[a-zA-Z0-9]{6}$" },
   },
   required: ["hole_address"],
 };

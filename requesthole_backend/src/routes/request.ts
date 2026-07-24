@@ -8,7 +8,7 @@ interface RequestParams {
 const params: JSONSchemaType<RequestParams> = {
   type: "object",
   properties: {
-    request_address: { type: "string", pattern: "^[a-zA-Z0-9]{5,6}$" },
+    request_address: { type: "string", pattern: "^[a-zA-Z0-9]{6}$" },
   },
   required: ["request_address"],
 };

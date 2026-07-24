@@ -24,3 +24,9 @@ dist-ssr
 *.sw?
 
 .env.keys
+
+# Docker Compose secrets (see .env.docker.example)
+.env.docker
+
+# Branch-scoped task review scaffolding
+reviews/
