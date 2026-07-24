@@ -1,6 +1,7 @@
 import { FastifyInstance, RouteShorthandOptions } from "fastify";
 import { JSONSchemaType } from "ajv";
 import generateAddress from "../utils/address-generator";
+import insertWithUniqueAddress from "../utils/unique-insert";
 import RequestBroadcaster from "../RequestBroadcaster";
 import { HoleParams } from "../schemas";
 
@@ -17,36 +18,48 @@ function routesWrapper(requestBroadcaster: RequestBroadcaster) {
     fastify: FastifyInstance,
     options: RouteShorthandOptions,
   ) {
+    // Prepared once per registration and reused across requests — better-sqlite3
+    // statements are meant to be prepared once, not rebuilt on the hot path.
+    const selectHole = fastify.db.prepare(
+      "SELECT hole_address, created FROM holes WHERE hole_address = ?;",
+    );
+    const insertHole = fastify.db.prepare(
+      "INSERT INTO holes (hole_address) VALUES (?) RETURNING created, hole_address;",
+    );
+    const deleteHole = fastify.db.prepare(
+      "DELETE FROM holes WHERE hole_address = ?;",
+    );
+    const selectHoleRequests = fastify.db.prepare(
+      `
+      SELECT
+        request_address,
+        r.created,
+        method,
+        request_path,
+        query_params,
+        headers
+      FROM holes AS h
+      INNER JOIN requests AS r USING (hole_id)
+      WHERE hole_address = ?
+      ORDER BY r.created, r.request_id
+    `,
+    );
+
     fastify.get<{ Params: HoleParams }>(
       "/api/hole/:hole_address",
       { ...options, schema: { params } },
       async (request, reply) => {
         const { hole_address } = request.params;
-        const client = await fastify.pg.connect();
-        try {
-          const { rows } = await client.query(
-            "SELECT hole_address, created FROM holes WHERE hole_address = $1;",
-            [hole_address],
-          );
-          reply.send(rows);
-        } finally {
-          client.release();
-        }
+        reply.send(selectHole.all(hole_address));
       },
     );
 
     fastify.post("/api/hole", options, async (_, reply) => {
-      const client = await fastify.pg.connect();
-      try {
-        const { rows } = await client.query(
-          "INSERT INTO holes (hole_address) VALUES ($1) RETURNING created, hole_address;",
-          [generateAddress()],
-        );
-        reply.code(201);
-        reply.send(rows);
-      } finally {
-        client.release();
-      }
+      const row = insertWithUniqueAddress(generateAddress, (address) =>
+        insertHole.get(address),
+      );
+      reply.code(201);
+      reply.send([row]);
     });
 
     fastify.delete<{ Params: HoleParams }>(
@@ -54,16 +67,8 @@ function routesWrapper(requestBroadcaster: RequestBroadcaster) {
       { ...options, schema: { params } },
       async (request, reply) => {
         const { hole_address } = request.params;
-        const client = await fastify.pg.connect();
-        try {
-          const { rowCount } = await client.query(
-            "DELETE FROM holes WHERE hole_address = $1;",
-            [hole_address],
-          );
-          reply.code((rowCount ?? 0) > 0 ? 204 : 404);
-        } finally {
-          client.release();
-        }
+        const { changes } = deleteHole.run(hole_address);
+        reply.code(changes > 0 ? 204 : 404);
       },
     );
 
@@ -71,28 +76,7 @@ function routesWrapper(requestBroadcaster: RequestBroadcaster) {
       "/api/hole/:hole_address/requests",
       { ...options, schema: { params } },
       async (request, reply) => {
-        const { hole_address } = request.params;
-        const client = await fastify.pg.connect();
-        try {
-          const { rows } = await client.query(
-            `
-            SELECT
-              request_address,
-              r.created,
-              method,
-              request_path,
-              query_params,
-              headers
-            FROM holes AS h
-            INNER JOIN requests AS r USING (hole_id)
-            WHERE hole_address = $1
-          `,
-            [hole_address],
-          );
-          reply.send(rows);
-        } finally {
-          client.release();
-        }
+        reply.send(selectHoleRequests.all(request.params.hole_address));
       },
     );
 

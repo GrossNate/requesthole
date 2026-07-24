@@ -1,6 +1,7 @@
 import { FastifyInstance, RouteShorthandOptions } from "fastify";
 import { JSONSchemaType } from "ajv";
 import generateAddress from "../utils/address-generator";
+import insertWithUniqueAddress from "../utils/unique-insert";
 import RequestBroadcaster from "../RequestBroadcaster";
 import RequestSansBody from "../schemas";
 
@@ -30,65 +31,67 @@ function routesWrapper(requestBroadcaster: RequestBroadcaster) {
       },
     );
 
+    // Prepared once per registration and reused across requests — this is the
+    // hot capture path, so rebuilding the statements per request is wasteful.
+    const selectHoleId = fastify.db.prepare(
+      "SELECT hole_id FROM holes WHERE hole_address = ?",
+    );
+    const insertRequest = fastify.db.prepare(
+      `
+        INSERT INTO requests
+          (hole_id, request_address, method, request_path, query_params,
+            headers, body)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const selectCapturedRequest = fastify.db.prepare(
+      `
+        SELECT
+          request_address,
+          created,
+          method,
+          request_path,
+          query_params,
+          headers
+        FROM requests
+        WHERE request_address = ?
+      `,
+    );
+
     fastify.all<{ Params: HoleParams }>(
       "/:hole_address",
       { ...options, schema: { params } },
       async (request, reply) => {
         fastify.log.info("called collection route");
         const { hole_address } = request.params;
-        const client = await fastify.pg.connect();
-        try {
-          const result = await client.query<{ hole_id: string }>(
-            "SELECT hole_id FROM holes WHERE hole_address = $1",
-            [hole_address],
-          );
-          if (!result.rows[0] || (result.rowCount && result.rowCount < 1)) {
-            reply.code(404);
-          } else {
-            const newRequestAddress = generateAddress();
-            await client.query(
-              `
-              INSERT INTO requests
-                (hole_id, request_address, method, request_path, query_params,
-                  headers, body)
-              VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-              [
-                result.rows[0].hole_id,
-                newRequestAddress,
+        const hole = selectHoleId.get(hole_address) as
+          | { hole_id: number }
+          | undefined;
+        if (!hole) {
+          reply.code(404);
+        } else {
+          const newRequestAddress = insertWithUniqueAddress(
+            generateAddress,
+            (address) => {
+              insertRequest.run(
+                hole.hole_id,
+                address,
                 request.method,
                 request.url,
-                request.params,
-                request.headers,
-                request.body,
-              ],
-            );
-            const { rows } = await client.query(
-              `
-                SELECT
-                  request_address,
-                  created,
-                  method,
-                  request_path,
-                  query_params,
-                  headers
-                FROM requests
-                WHERE request_address = $1
-              `,
-              [newRequestAddress],
-            );
-            const parseResult = RequestSansBody.safeParse(rows[0]);
-            if (!parseResult.success) {
-              fastify.log.error(parseResult.error);
-            } else {
-              requestBroadcaster.broadcastRequest(
-                hole_address,
-                parseResult.data,
+                JSON.stringify(request.query),
+                JSON.stringify(request.headers),
+                (request.body as Buffer | undefined) ?? null,
               );
-            }
-            reply.code(200);
+              return address;
+            },
+          );
+          const row = selectCapturedRequest.get(newRequestAddress);
+          const parseResult = RequestSansBody.safeParse(row);
+          if (!parseResult.success) {
+            fastify.log.error(parseResult.error);
+          } else {
+            requestBroadcaster.broadcastRequest(hole_address, parseResult.data);
           }
-        } finally {
-          client.release();
+          reply.code(200);
         }
       },
     );

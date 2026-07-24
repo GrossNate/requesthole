@@ -23,10 +23,15 @@ dist-ssr
 *.sln
 *.sw?
 
+# Obsolete since the SQLite migration; ignored so stale local copies stay invisible.
 .env.keys
-
-# Docker Compose secrets (see .env.docker.example)
 .env.docker
+
+# Local SQLite database files (dev loop writes requesthole_backend/data/)
+data/
+*.db
+*.db-wal
+*.db-shm
 
 # Branch-scoped task review scaffolding
 reviews/

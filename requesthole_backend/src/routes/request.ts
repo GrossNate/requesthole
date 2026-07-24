@@ -14,21 +14,33 @@ const params: JSONSchemaType<RequestParams> = {
 };
 
 function routes(fastify: FastifyInstance, options: RouteShorthandOptions) {
+  // Prepared once per registration and reused across requests.
+  const deleteRequest = fastify.db.prepare(
+    "DELETE FROM requests WHERE request_address = ?;",
+  );
+  const selectRequest = fastify.db.prepare(
+    `
+      SELECT
+        request_address,
+        created,
+        method,
+        request_path,
+        query_params,
+        headers
+      FROM requests
+      WHERE request_address = ?
+    `,
+  );
+  const selectRequestBody = fastify.db.prepare(
+    `SELECT headers, body FROM requests WHERE request_address = ?`,
+  );
+
   fastify.delete<{ Params: RequestParams }>(
     "/api/request/:request_address",
     { ...options, schema: { params } },
     async (request, reply) => {
-      const { request_address } = request.params;
-      const client = await fastify.pg.connect();
-      try {
-        const { rowCount } = await client.query(
-          "DELETE FROM requests WHERE request_address = $1;",
-          [request_address],
-        );
-        reply.code((rowCount ?? 0) > 0 ? 204 : 404);
-      } finally {
-        client.release();
-      }
+      const { changes } = deleteRequest.run(request.params.request_address);
+      reply.code(changes > 0 ? 204 : 404);
     },
   );
 
@@ -36,30 +48,11 @@ function routes(fastify: FastifyInstance, options: RouteShorthandOptions) {
     "/api/request/:request_address",
     { ...options, schema: { params } },
     async (request, reply) => {
-      const { request_address } = request.params;
-      const client = await fastify.pg.connect();
-      try {
-        const { rows } = await client.query(
-          `
-            SELECT
-              request_address,
-              created,
-              method,
-              request_path,
-              query_params,
-              headers
-            FROM requests
-            WHERE request_address = $1
-          `,
-          [request_address],
-        );
-        if (rows.length < 1) {
-          reply.code(404);
-        } else {
-          reply.send(rows[0]);
-        }
-      } finally {
-        client.release();
+      const row = selectRequest.get(request.params.request_address);
+      if (row === undefined) {
+        reply.code(404);
+      } else {
+        reply.send(row);
       }
     },
   );
@@ -68,29 +61,37 @@ function routes(fastify: FastifyInstance, options: RouteShorthandOptions) {
     "/api/request/:request_address/body",
     { ...options, schema: { params } },
     async (request, reply) => {
-      const { request_address } = request.params;
-      const client = await fastify.pg.connect();
-      try {
-        const { rows } = await client.query(
-          `SELECT headers, body FROM requests WHERE request_address = $1`,
-          [request_address],
+      const row = selectRequestBody.get(request.params.request_address);
+      if (row === undefined) {
+        reply.code(404);
+      } else {
+        const { body, headers } = row as {
+          body: Buffer | string | null;
+          headers: string;
+        };
+        const buffer =
+          body === null
+            ? Buffer.alloc(0)
+            : body instanceof Buffer
+              ? body
+              : Buffer.from(body);
+        const headersObject = JSON.parse(headers) as Partial<{
+          "content-type": string;
+        }>;
+        // Serve captured bodies inertly. The stored content is untrusted, so a
+        // stored `<script>` must never execute on this origin: `nosniff` stops
+        // the browser inferring an executable type, and `attachment` makes
+        // direct navigation download rather than render. The viewer still shows
+        // images inline because `<img>` sub-resource loads ignore both headers;
+        // the PDF link, which opened a tab, now downloads instead — the safe
+        // trade for not rendering attacker-controlled documents same-origin.
+        reply.header(
+          "content-type",
+          headersObject["content-type"] ?? "application/octet-stream",
         );
-        if (rows.length < 1) {
-          reply.code(404);
-        } else {
-          const { body, headers } = rows[0] as {
-            body: Buffer | string;
-            headers: string;
-          };
-          const buffer = body instanceof Buffer ? body : Buffer.from(body);
-          const headersObject = JSON.parse(headers) as Partial<{
-            "content-type": string;
-          }>;
-          reply.header("content-type", headersObject["content-type"]);
-          reply.send(buffer);
-        }
-      } finally {
-        client.release();
+        reply.header("x-content-type-options", "nosniff");
+        reply.header("content-disposition", "attachment");
+        reply.send(buffer);
       }
     },
   );

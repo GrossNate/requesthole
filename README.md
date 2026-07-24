@@ -8,14 +8,17 @@ A place to capture, store, and examine your HTTP requests.
 
 ## Installation instructions
 
-This uses [Docker Compose](https://docs.docker.com/compose/) and
-[dotenvx](https://dotenvx.com), so you'll need to install those on your own.
+This uses [Docker Compose](https://docs.docker.com/compose/), so you'll need
+that installed. There are no secrets to configure — storage is a single
+embedded SQLite file on a Docker volume.
 
-1. Either copy the `.env.keys` file from wherever you created it or replace the
-   existing keys in `.env` with your own (in plaintext) and then run `dotenvx
-   encrypt`.
-2. Set up Nginx or whatever you're using.
-3. `dotenvx run docker compose up -- --detach`
+1. `docker compose up --build --detach`
+2. Open `http://localhost:8080` (override the published port with `WEB_PORT`).
+
+Captured data lives in the `data` volume and survives `docker compose down`; run
+`docker compose down -v` to discard it.
+
+> A fuller install/deploy guide is coming in task 0003.
 
 ## Route design
 

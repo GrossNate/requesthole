@@ -1,28 +1,15 @@
 services:
-  requesthole-postgres:
-    image: 'postgres:17-alpine'
-    restart: always
-    # Internal-only: no host port mapping (was 5432:5432).
-    env_file:
-      - .env.docker
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
-      interval: 5s
-      timeout: 5s
-      retries: 10
-
   backend:
     build:
       context: ./requesthole_backend
     restart: always
     # Internal-only: reachable as http://backend:3000 on the compose network.
-    env_file:
-      - .env.docker
-    depends_on:
-      requesthole-postgres:
-        condition: service_healthy
+    environment:
+      DATABASE_PATH: /data/requesthole.db
+    volumes:
+      # Directory volume, not a single file: SQLite WAL mode writes .db + -wal + -shm
+      # sidecars that must sit together and persist.
+      - data:/data
 
   nginx:
     build:
@@ -35,4 +22,4 @@ services:
       - backend
 
 volumes:
-  postgres-data:
+  data:
