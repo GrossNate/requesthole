@@ -142,3 +142,23 @@ the capture test now asserts the stored artifact; `npm test`/`npm run typecheck`
 `tsc -p tsconfig.eslint.json` so `test/` is type-checked (it immediately caught a bad type
 annotation); README install section rewritten off dotenvx/`.env`; PLAN.md Deployment/Storage bullets
 updated to reflect the completed migration. Final: 22 app tests + 4 helper tests green, lint + typecheck clean.
+
+## Second review-fix round (2026-07-23)
+
+A re-review panel over both commits returned **Security and Spec clean** (the security lens
+verified the XSS fix is closed on every path) and four low-severity items, all fixed:
+
+- **Prepared statements hoisted** (Bug nit) — every route now calls `fastify.db.prepare(...)` once
+  at registration and reuses the statement, instead of rebuilding it per request on the hot capture
+  path (`collect.ts`, `hole.ts`, `holes.ts`, `request.ts`).
+- **End-to-end collision-retry test** (Standards minor) — `test/collision-retry.test.ts` mocks the
+  address generator to force a genuine DB UNIQUE collision through `POST /api/hole` and asserts the
+  route recovers with a distinct address (the helper's own unit test stays in `unique-insert.test.ts`).
+- **SSE delivery test de-flaked** (Bug minor) — replaced the fixed 250ms settle with a poll-capture
+  loop that retries the capture until a frame lands (or a deadline), removing the wall-clock race.
+- **PDF download acknowledged** (Bug minor) — the inert-body comment now notes the PDF link
+  downloads rather than renders (the intended security trade), and the frontend link is relabeled
+  "Download PDF" (`requesthole_frontend/src/components/Request.tsx`).
+
+Final: 23 tests across 3 files green (18 app + 4 helper + 1 collision), lint + typecheck clean,
+Docker smoke test 8/8.

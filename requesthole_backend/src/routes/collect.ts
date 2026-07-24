@@ -31,29 +31,48 @@ function routesWrapper(requestBroadcaster: RequestBroadcaster) {
       },
     );
 
+    // Prepared once per registration and reused across requests — this is the
+    // hot capture path, so rebuilding the statements per request is wasteful.
+    const selectHoleId = fastify.db.prepare(
+      "SELECT hole_id FROM holes WHERE hole_address = ?",
+    );
+    const insertRequest = fastify.db.prepare(
+      `
+        INSERT INTO requests
+          (hole_id, request_address, method, request_path, query_params,
+            headers, body)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const selectCapturedRequest = fastify.db.prepare(
+      `
+        SELECT
+          request_address,
+          created,
+          method,
+          request_path,
+          query_params,
+          headers
+        FROM requests
+        WHERE request_address = ?
+      `,
+    );
+
     fastify.all<{ Params: HoleParams }>(
       "/:hole_address",
       { ...options, schema: { params } },
       async (request, reply) => {
         fastify.log.info("called collection route");
         const { hole_address } = request.params;
-        const hole = fastify.db
-          .prepare("SELECT hole_id FROM holes WHERE hole_address = ?")
-          .get(hole_address) as { hole_id: number } | undefined;
+        const hole = selectHoleId.get(hole_address) as
+          | { hole_id: number }
+          | undefined;
         if (!hole) {
           reply.code(404);
         } else {
-          const insert = fastify.db.prepare(
-            `
-              INSERT INTO requests
-                (hole_id, request_address, method, request_path, query_params,
-                  headers, body)
-              VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          );
           const newRequestAddress = insertWithUniqueAddress(
             generateAddress,
             (address) => {
-              insert.run(
+              insertRequest.run(
                 hole.hole_id,
                 address,
                 request.method,
@@ -65,21 +84,7 @@ function routesWrapper(requestBroadcaster: RequestBroadcaster) {
               return address;
             },
           );
-          const row = fastify.db
-            .prepare(
-              `
-                SELECT
-                  request_address,
-                  created,
-                  method,
-                  request_path,
-                  query_params,
-                  headers
-                FROM requests
-                WHERE request_address = ?
-              `,
-            )
-            .get(newRequestAddress);
+          const row = selectCapturedRequest.get(newRequestAddress);
           const parseResult = RequestSansBody.safeParse(row);
           if (!parseResult.success) {
             fastify.log.error(parseResult.error);

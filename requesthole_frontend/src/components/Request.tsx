@@ -104,7 +104,7 @@ const Request = () => {
                 to={`${holeService.BASE_URL}/api/request/${request_address}/body`}
                 target="_blank"
               >
-                📄 PDF
+                📄 Download PDF
               </Link>
             </div>
           </div>

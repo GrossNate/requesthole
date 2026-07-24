@@ -155,6 +155,7 @@ describe("request capture", () => {
         : 0;
     const holeAddress = await createHole(sseApp);
 
+    let received = false;
     const frame = new Promise<string>((resolve, reject) => {
       const req = http.get(
         {
@@ -168,6 +169,7 @@ describe("request capture", () => {
           res.on("data", (chunk: string) => {
             buffer += chunk;
             if (/^data:/m.test(buffer)) {
+              received = true;
               req.destroy();
               resolve(buffer);
             }
@@ -181,14 +183,20 @@ describe("request capture", () => {
       }, 8000).unref();
     });
 
-    // Let the server register the subscriber before the capture broadcasts.
-    await delay(250);
-    await sseApp.inject({
-      method: "POST",
-      url: `/${holeAddress}?probe=1`,
-      headers: { "content-type": "text/plain" },
-      body: "sse delivery",
-    });
+    // The broadcaster only pushes to already-connected subscribers, so capture
+    // repeatedly until a frame lands rather than betting on a fixed settle time
+    // for the real socket to register. Each retry is a harmless extra capture.
+    const deadline = Date.now() + 7000;
+    while (!received && Date.now() < deadline) {
+      await sseApp.inject({
+        method: "POST",
+        url: `/${holeAddress}?probe=1`,
+        headers: { "content-type": "text/plain" },
+        body: "sse delivery",
+      });
+      if (received) break;
+      await delay(100);
+    }
 
     const payload = await frame;
     // The broadcast is body-less (RequestSansBody) but carries the metadata.
