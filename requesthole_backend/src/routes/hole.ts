@@ -1,6 +1,7 @@
 import { FastifyInstance, RouteShorthandOptions } from "fastify";
 import { JSONSchemaType } from "ajv";
 import generateAddress from "../utils/address-generator";
+import insertWithUniqueAddress from "../utils/unique-insert";
 import RequestBroadcaster from "../RequestBroadcaster";
 import { HoleParams } from "../schemas";
 
@@ -32,11 +33,12 @@ function routesWrapper(requestBroadcaster: RequestBroadcaster) {
     );
 
     fastify.post("/api/hole", options, async (_, reply) => {
-      const row = fastify.db
-        .prepare(
-          "INSERT INTO holes (hole_address) VALUES (?) RETURNING created, hole_address;",
-        )
-        .get(generateAddress());
+      const insert = fastify.db.prepare(
+        "INSERT INTO holes (hole_address) VALUES (?) RETURNING created, hole_address;",
+      );
+      const row = insertWithUniqueAddress(generateAddress, (address) =>
+        insert.get(address),
+      );
       reply.code(201);
       reply.send([row]);
     });
@@ -71,6 +73,7 @@ function routesWrapper(requestBroadcaster: RequestBroadcaster) {
             FROM holes AS h
             INNER JOIN requests AS r USING (hole_id)
             WHERE hole_address = ?
+            ORDER BY r.created, r.request_id
           `,
           )
           .all(hole_address);

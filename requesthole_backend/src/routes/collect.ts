@@ -1,6 +1,7 @@
 import { FastifyInstance, RouteShorthandOptions } from "fastify";
 import { JSONSchemaType } from "ajv";
 import generateAddress from "../utils/address-generator";
+import insertWithUniqueAddress from "../utils/unique-insert";
 import RequestBroadcaster from "../RequestBroadcaster";
 import RequestSansBody from "../schemas";
 
@@ -42,24 +43,28 @@ function routesWrapper(requestBroadcaster: RequestBroadcaster) {
         if (!hole) {
           reply.code(404);
         } else {
-          const newRequestAddress = generateAddress();
-          fastify.db
-            .prepare(
-              `
+          const insert = fastify.db.prepare(
+            `
               INSERT INTO requests
                 (hole_id, request_address, method, request_path, query_params,
                   headers, body)
               VALUES (?, ?, ?, ?, ?, ?, ?)`,
-            )
-            .run(
-              hole.hole_id,
-              newRequestAddress,
-              request.method,
-              request.url,
-              JSON.stringify(request.params),
-              JSON.stringify(request.headers),
-              (request.body as Buffer | undefined) ?? null,
-            );
+          );
+          const newRequestAddress = insertWithUniqueAddress(
+            generateAddress,
+            (address) => {
+              insert.run(
+                hole.hole_id,
+                address,
+                request.method,
+                request.url,
+                JSON.stringify(request.query),
+                JSON.stringify(request.headers),
+                (request.body as Buffer | undefined) ?? null,
+              );
+              return address;
+            },
+          );
           const row = fastify.db
             .prepare(
               `

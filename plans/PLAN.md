@@ -21,7 +21,7 @@ pointers. Each task is one feature on its own branch, ending in a PR. Task bodie
 
 ## Architectural decisions
 
-Durable decisions that apply across all tasks. (Storage is mid-migration — see the Storage note.)
+Durable decisions that apply across all tasks.
 
 - **Backend**: Node 24, Fastify 5, TypeScript. Routes under `/api/*`; a root-level collect route
   `fastify.all("/:hole_address")` captures any method to a single fixed 6-char alphanumeric path
@@ -29,21 +29,22 @@ Durable decisions that apply across all tasks. (Storage is mid-migration — see
 - **Frontend**: Vite + React 19 + Tailwind/daisyUI, built to static assets. Single-origin in
   production — `services.ts` sets `BASE_URL=""` for prod builds, so the app calls `/api/*` on its
   own origin. Client routes: `/`, `/view/:hole_address`, `/view/:hole_address/:request_address`.
-- **Deployment** (task 0001): prod-only Docker Compose, three services — `nginx` (sole published
-  port, `${WEB_PORT:-8080}:80`, serves static frontend + reverse-proxies), `backend` (internal,
-  `backend:3000`), `requesthole-postgres` (internal). Nginx routing resolves single-origin traffic:
-  `/api/*` → backend (SSE-safe: unbuffered, HTTP/1.1, long read timeout); `^/[a-zA-Z0-9]{6}$` →
-  backend (collect capture); `/` → static + SPA fallback. Host dev loop (`npm run dev`) stays
-  non-containerized. Compose secrets in a gitignored `.env.docker` (not `.env`, to avoid the
-  dotenvx/Compose filename collision); dotenvx stays dev-only.
+- **Deployment** (task 0001, storage retired in 0002): prod-only Docker Compose, two services —
+  `nginx` (sole published port, `${WEB_PORT:-8080}:80`, serves static frontend + reverse-proxies)
+  and `backend` (internal, `backend:3000`), with a `data` volume at `/data` for the SQLite file.
+  Nginx routing resolves single-origin traffic: `/api/*` → backend (SSE-safe: unbuffered, HTTP/1.1,
+  long read timeout); `^/[a-zA-Z0-9]{6}$` → backend (collect capture); `/` → static + SPA fallback.
+  Host dev loop (`npm run dev`) stays non-containerized. No secrets remain — the stack has no
+  `.env.docker` or dotenvx; the backend's only config is a non-secret `DATABASE_PATH`.
 - **Schema**: two tables — `holes` (`hole_address`, `created`) and `requests` (`request_address`,
   `hole_id` FK `ON DELETE CASCADE`, `created`, `method`, `request_path`, `query_params`, `headers`,
   `body`). `query_params`/`headers` stored as JSON text; `body` as binary.
-- **Storage**: Postgres today; **migrating to SQLite (`better-sqlite3`, raw SQL, no ORM) in task
-  0002**. Post-migration: single-file DB at `DATABASE_PATH` (container `/data/requesthole.db`) on a
-  directory volume (WAL sidecars); pragmas `foreign_keys=ON`, `busy_timeout=5000`, `journal_mode=WAL`,
-  `synchronous=NORMAL`; `created` as ISO-8601 TEXT default. This removes all secrets, retiring
-  dotenvx/`.env.keys`/encrypted `.env`.
+- **Storage** (SQLite since task 0002): `better-sqlite3`, raw SQL, no ORM — one long-lived
+  connection opened by a `fastify.db` plugin. Single-file DB at `DATABASE_PATH` (container
+  `/data/requesthole.db`) on a directory volume (WAL sidecars); pragmas `foreign_keys=ON`,
+  `busy_timeout=5000`, `journal_mode=WAL`, `synchronous=NORMAL`; `created` as ISO-8601 TEXT default.
+  Address columns are `UNIQUE`; inserts retry on a collision. No secrets — dotenvx/`.env.keys`/
+  encrypted `.env` are retired.
 
 ---
 

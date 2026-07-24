@@ -111,3 +111,34 @@ Decisions beyond the spec:
   parent dirs; needed for the dev loop's `./data/requesthole.db` and first boot on a fresh volume.
 - Local leftovers for the user: stopped orphan `requesthole-requesthole-postgres-1` container and
   `requesthole_postgres-data` volume (old Postgres data) — remove by hand when ready.
+- **eslint glob** `dist/*` → `dist/**` (config change to ignore nested `dist/` output, needed once
+  typed lint started resolving files) — flagged as an undocumented drive-by, noted here.
+
+## Review-fix round (2026-07-23)
+
+Task-review panel (Standards/Spec/Bug/Security) surfaced 12 findings; all fixed on this branch.
+Four were defects ported verbatim from the Postgres version — the migration spec was "behave
+identically," so they weren't regressions, but the review-fix pass corrected them since the lines
+were already being rewritten here:
+
+- **query_params stored route params, not the query string** (Bug+Standards major) — `collect.ts`
+  now binds `JSON.stringify(request.query)`; the bent test that asserted `{hole_address}` now
+  asserts the real query string. This is a deliberate behavior change from "today."
+- **`/api/request/:addr/body` 500 on a bodyless capture** (Bug major) — null body now serves an
+  empty Buffer.
+- **Stored XSS via replayed Content-Type** (Security major) — the body route now always sends
+  `X-Content-Type-Options: nosniff` + `Content-Disposition: attachment` and defaults an absent
+  content-type to `application/octet-stream`. Direct navigation downloads instead of rendering, so
+  a stored `<script>` can't execute on-origin; the viewer's inline `<img>` still renders (sub-
+  resource loads ignore the disposition). Not a sandboxed origin (out of scope) but closes the
+  execution vector.
+- **No UNIQUE on address columns** (Bug minor) — both columns are now `UNIQUE`; new
+  `utils/unique-insert.ts` retries the insert on a `SQLITE_CONSTRAINT_UNIQUE` collision (crc32-over-
+  UUID addresses collide at the birthday bound, ~65k rows). Unit-tested in `test/unique-insert.test.ts`.
+
+Also: deterministic `ORDER BY created, <pk>` on both listing routes (millisecond `created` ties);
+a real listening-server SSE **delivery** test (the suite previously only spied on the broadcaster);
+the capture test now asserts the stored artifact; `npm test`/`npm run typecheck` now run
+`tsc -p tsconfig.eslint.json` so `test/` is type-checked (it immediately caught a bad type
+annotation); README install section rewritten off dotenvx/`.env`; PLAN.md Deployment/Storage bullets
+updated to reflect the completed migration. Final: 22 app tests + 4 helper tests green, lint + typecheck clean.

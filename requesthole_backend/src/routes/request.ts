@@ -68,14 +68,29 @@ function routes(fastify: FastifyInstance, options: RouteShorthandOptions) {
         reply.code(404);
       } else {
         const { body, headers } = row as {
-          body: Buffer | string;
+          body: Buffer | string | null;
           headers: string;
         };
-        const buffer = body instanceof Buffer ? body : Buffer.from(body);
+        const buffer =
+          body === null
+            ? Buffer.alloc(0)
+            : body instanceof Buffer
+              ? body
+              : Buffer.from(body);
         const headersObject = JSON.parse(headers) as Partial<{
           "content-type": string;
         }>;
-        reply.header("content-type", headersObject["content-type"]);
+        // Serve captured bodies inertly. The stored content is untrusted, so a
+        // stored `<script>` must never execute on this origin: `nosniff` stops
+        // the browser inferring an executable type, and `attachment` makes
+        // direct navigation download rather than render. The viewer still
+        // renders images because `<img>` sub-resource loads ignore both.
+        reply.header(
+          "content-type",
+          headersObject["content-type"] ?? "application/octet-stream",
+        );
+        reply.header("x-content-type-options", "nosniff");
+        reply.header("content-disposition", "attachment");
         reply.send(buffer);
       }
     },

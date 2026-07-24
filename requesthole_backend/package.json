@@ -2,7 +2,8 @@
   "scripts": {
     "tsc": "tsc",
     "dev": "DATABASE_PATH=./data/requesthole.db ts-node-dev src/index.ts",
-    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.eslint.json",
+    "test": "tsc -p tsconfig.eslint.json && vitest run",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "build": "tsc",
