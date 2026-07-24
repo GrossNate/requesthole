@@ -68,9 +68,10 @@ architectural header; this file distills what the implementer needs.
 
 ## Human-in-the-loop tasks
 
-- [ ] [verify] Bring the stack up, open the app in a browser, create a hole, send it a request, and
+- [x] [verify] Bring the stack up, open the app in a browser, create a hole, send it a request, and
       confirm the request appears live in the React UI via SSE — end-to-end browser rendering +
       EventSource behavior through Nginx can't be fully asserted by the curl smoke test.
+      *Confirmed by the user 2026-07-22: a curl request to the hole address rendered live in the UI.*
 
 ## Acceptance criteria
 
@@ -79,7 +80,7 @@ architectural header; this file distills what the implementer needs.
 - [x] Only `nginx` is reachable from the host; `backend` and `requesthole-postgres` are not
       published. *(Verified: `curl localhost:3000` refused; `nc localhost 5432` closed.)*
 - [x] Every current behavior works through Nginx: hole CRUD, request capture at `/:hole_address`,
-      request viewing, and live SSE updates. *(Smoke test 7/7; browser SSE render pending [verify].)*
+      request viewing, and live SSE updates. *(Smoke test 7/7; browser SSE render confirmed.)*
 - [x] The collect route captures bare 6-char addresses; SPA deep links (`/view/...`) resolve on
       hard refresh; static assets load.
 - [x] No secrets are committed; `.env.docker` is gitignored and `.env.docker.example` documents the
