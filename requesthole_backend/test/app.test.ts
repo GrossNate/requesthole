@@ -147,72 +147,77 @@ describe("request capture", () => {
 
   it("delivers a captured request over the live SSE events stream", async () => {
     const sseApp = buildApp({ databasePath: ":memory:" });
-    await sseApp.listen({ port: 0, host: "127.0.0.1" });
-    const serverAddress = sseApp.server.address();
-    const port =
-      typeof serverAddress === "object" && serverAddress
-        ? serverAddress.port
-        : 0;
-    const holeAddress = await createHole(sseApp);
+    try {
+      await sseApp.listen({ port: 0, host: "127.0.0.1" });
+      const serverAddress = sseApp.server.address();
+      const port =
+        typeof serverAddress === "object" && serverAddress
+          ? serverAddress.port
+          : 0;
+      const holeAddress = await createHole(sseApp);
 
-    let received = false;
-    const frame = new Promise<string>((resolve, reject) => {
-      const req = http.get(
-        {
-          host: "127.0.0.1",
-          port,
-          path: `/api/hole/${holeAddress}/events`,
-        },
-        (res) => {
-          res.setEncoding("utf8");
-          let buffer = "";
-          res.on("data", (chunk: string) => {
-            buffer += chunk;
-            if (/^data:/m.test(buffer)) {
-              received = true;
-              req.destroy();
-              resolve(buffer);
-            }
-          });
-        },
-      );
-      req.on("error", reject);
-      setTimeout(() => {
-        req.destroy();
-        reject(new Error("no SSE data frame arrived within the timeout"));
-      }, 8000).unref();
-    });
-
-    // The broadcaster only pushes to already-connected subscribers, so capture
-    // repeatedly until a frame lands rather than betting on a fixed settle time
-    // for the real socket to register. Each retry is a harmless extra capture.
-    const deadline = Date.now() + 7000;
-    while (!received && Date.now() < deadline) {
-      await sseApp.inject({
-        method: "POST",
-        url: `/${holeAddress}?probe=1`,
-        headers: { "content-type": "text/plain" },
-        body: "sse delivery",
+      let received = false;
+      const frame = new Promise<string>((resolve, reject) => {
+        const req = http.get(
+          {
+            host: "127.0.0.1",
+            port,
+            path: `/api/hole/${holeAddress}/events`,
+          },
+          (res) => {
+            res.setEncoding("utf8");
+            let buffer = "";
+            res.on("data", (chunk: string) => {
+              buffer += chunk;
+              if (/^data:/m.test(buffer)) {
+                received = true;
+                req.destroy();
+                resolve(buffer);
+              }
+            });
+          },
+        );
+        req.on("error", reject);
+        setTimeout(() => {
+          req.destroy();
+          reject(new Error("no SSE data frame arrived within the timeout"));
+        }, 8000).unref();
       });
-      if (received) break;
-      await delay(100);
+
+      // The broadcaster only pushes to already-connected subscribers, so capture
+      // repeatedly until a frame lands rather than betting on a fixed settle time
+      // for the real socket to register. Each retry is a harmless extra capture.
+      const deadline = Date.now() + 7000;
+      while (!received && Date.now() < deadline) {
+        await sseApp.inject({
+          method: "POST",
+          url: `/${holeAddress}?probe=1`,
+          headers: { "content-type": "text/plain" },
+          body: "sse delivery",
+        });
+        if (received) break;
+        await delay(100);
+      }
+
+      const payload = await frame;
+      // The broadcast is body-less (RequestSansBody) but carries the metadata.
+      const data = payload
+        .split("\n")
+        .find((line) => line.startsWith("data:"))!
+        .slice("data:".length);
+      const broadcast = JSON.parse(data) as {
+        method: string;
+        request_address: string;
+      };
+      expect(broadcast.method).toBe("POST");
+      expect(broadcast.request_address).toMatch(/^[a-zA-Z0-9]{6}$/);
+    } finally {
+      // Always tear down the listener + WAL handle, even if an assertion throws.
+      await sseApp.close();
     }
-
-    const payload = await frame;
-    // The broadcast is body-less (RequestSansBody) but carries the metadata.
-    const data = payload
-      .split("\n")
-      .find((line) => line.startsWith("data:"))!
-      .slice("data:".length);
-    const broadcast = JSON.parse(data) as {
-      method: string;
-      request_address: string;
-    };
-    expect(broadcast.method).toBe("POST");
-    expect(broadcast.request_address).toMatch(/^[a-zA-Z0-9]{6}$/);
-
-    await sseApp.close();
-  });
+    // Give the poll-capture loop (7s) and frame timeout (8s) room to run past
+    // vitest's 5s default before it aborts and swallows the custom error.
+  }, 15000);
 
   it("404s a request to an unknown hole address", async () => {
     const response = await app.inject({
