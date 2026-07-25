@@ -29,48 +29,64 @@ function App() {
   };
 
   return (
-    <div className="h-screen flex flex-col overflow-hidden">
-      <header className="h-20">
-        <div className="navbar bg-base-100">
-          <div className="ps-3">
-            <h1 className="text-xl">
-              <img src="/favicon.png" className="max-h-10"></img>
-            </h1>
-          </div>
-          <div className="ps-3">
-            <h1 className="text-xl">RequestHole</h1>
-          </div>
-          <div className="flex grow justify-end px-2">
-            <div className="flex items-stretch">
-              <div className="btn btn-ghost rounded-field">
-                <Link to="/">Home</Link>
+    <div className="bg-base-100 text-base-content flex h-screen flex-col overflow-hidden">
+      <header className="border-base-300 bg-base-100/80 border-b backdrop-blur">
+        <div className="navbar px-gutter gap-gutter min-h-0 py-snug">
+          {/* Logo and wordmark are one mark: the disk sits tight against the
+              type, and the two share a baseline. */}
+          <Link to="/" className="gap-snug group flex items-center">
+            <img
+              src="/favicon.png"
+              alt="RequestHole logo"
+              className="size-9 drop-shadow-[0_0_12px_var(--color-primary)] transition-transform group-hover:scale-105"
+            />
+            <span className="text-title leading-none font-semibold tracking-tight">
+              Request
+              <span className="text-primary">Hole</span>
+            </span>
+          </Link>
+
+          <nav className="gap-tight flex grow items-center justify-end">
+            <Link to="/" className="btn btn-sm btn-ghost text-body">
+              Home
+            </Link>
+            <div className="dropdown dropdown-hover dropdown-end">
+              <div
+                tabIndex={0}
+                role="button"
+                className="btn btn-sm btn-ghost text-body"
+              >
+                Holes
+                <span className="text-base-content/40 text-caption">
+                  {holes.length > 0 ? holes.length : ""}
+                </span>
               </div>
-              <div className="dropdown dropdown-hover">
-                <div
-                  tabIndex={0}
-                  role="button"
-                  className="btn btn-ghost rounded-field"
-                >
-                  Holes
-                </div>
-                <ul
-                  tabIndex={0}
-                  className="menu dropdown-content bg-base-200 rounded-box z-1 w-52 shadow-sm"
-                >
-                  {holes.map((hole) => (
+              <ul
+                tabIndex={0}
+                className="menu dropdown-content bg-base-200 border-base-300 rounded-box z-1 mt-tight w-56 border p-tight shadow-lg"
+              >
+                {holes.length === 0 ? (
+                  <li className="text-caption text-base-content/50 px-snug py-tight">
+                    No holes yet
+                  </li>
+                ) : (
+                  holes.map((hole) => (
                     <li key={hole.hole_address}>
-                      <Link to={`/view/${hole.hole_address}`}>
+                      <Link
+                        to={`/view/${hole.hole_address}`}
+                        className="address"
+                      >
                         {hole.hole_address}
                       </Link>
                     </li>
-                  ))}
-                </ul>
-              </div>
+                  ))
+                )}
+              </ul>
             </div>
-          </div>
+          </nav>
         </div>
       </header>
-      <main className="flex-1 min-h-0 p-3">
+      <main className="px-gutter py-gutter min-h-0 flex-1">
         <Routes>
           <Route path="/view/:hole_address" element={<Hole />} />
           <Route

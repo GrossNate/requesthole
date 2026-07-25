@@ -11,12 +11,16 @@ export interface HomeBlockProps {
 
 export interface RequestObject {
   request_address: string;
-  created: number;
+  /** ISO-8601 text, as stored — e.g. "2026-07-25T14:03:22.145Z". */
+  created: string;
   method: string;
   request_path: string;
+  /** JSON text of the parsed querystring. */
   query_params: string;
+  /** JSON text of the captured headers. */
   headers: string;
-  headersObject: RequestHeadersObject;
+  /** Client-side only: `headers` parsed. Never present on the wire. */
+  headersObject?: RequestHeadersObject;
 }
 
 export type RequestHeadersObject = { [key: string]: string };

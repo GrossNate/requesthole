@@ -4,6 +4,7 @@ import holeService from "../services";
 
 import { type HomeBlockProps } from "../types";
 import type React from "react";
+import EmptyState from "./EmptyState";
 
 const Home: React.FC<HomeBlockProps> = ({ holes, setHoles, createHole }) => {
   const handleDeleteHole = (hole_address: string) => {
@@ -23,62 +24,94 @@ const Home: React.FC<HomeBlockProps> = ({ holes, setHoles, createHole }) => {
     return handler;
   };
 
-  const maybeHoleList = () => {
-    if (holes.length === 0) return null;
-
-    return (
-      <div className="h-full overflow-y-auto pb-16">
-        <table className="table table-lg table-pin-rows">
-          <thead>
-            <tr>
-              <th colSpan={2} className="text-xl">
-                Holes
-              </th>
-            </tr>
-          </thead>
-          <tbody>{allHoles()}</tbody>
-        </table>
-      </div>
-    );
-  };
-
   const handleCreateHole: MouseEventHandler = (event) => {
     event.preventDefault();
     createHole();
   };
 
-  const allHoles = () => {
-    return holes.map(({ hole_address }: { hole_address: string }) => (
-      <tr key={hole_address}>
-        <td>
-          <Link to={`/view/${hole_address}`}>{hole_address}</Link>
-        </td>
-        <td>
-          <button
-            className="btn btn-sm btn-error"
-            onClick={handleDeleteHole(hole_address)}
-          >
-            delete
-          </button>
-        </td>
-      </tr>
-    ));
-  };
+  const createButton = () => (
+    <button
+      type="button"
+      onClick={handleCreateHole}
+      className="btn btn-primary gap-tight"
+    >
+      <span aria-hidden="true" className="text-lead leading-none">
+        +
+      </span>
+      Create hole
+    </button>
+  );
+
+  const holeList = () => (
+    <div className="scroll-pane">
+      <table className="table-pin-rows table w-full">
+        <thead>
+          <tr className="bg-base-200 text-base-content/60">
+            <th scope="col">Address</th>
+            <th scope="col" className="w-24">
+              <span className="sr-only">Actions</span>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {holes.map(({ hole_address }: { hole_address: string }) => (
+            <tr
+              key={hole_address}
+              className="hover:bg-base-200/60 border-base-300"
+            >
+              <td>
+                <Link
+                  to={`/view/${hole_address}`}
+                  className="address text-primary hover:underline"
+                >
+                  {hole_address}
+                </Link>
+              </td>
+              <td className="text-right">
+                <button
+                  type="button"
+                  className="btn btn-xs btn-ghost text-error"
+                  onClick={handleDeleteHole(hole_address)}
+                >
+                  delete
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 
   return (
-    <>
-      <div className="breadcrumbs text-sm">
+    <div className="gap-gutter flex h-full flex-col">
+      <nav className="breadcrumbs text-caption py-0">
         <ul>
-          <li>
-            <div className="btn btn-ghost btn-disabled">All holes</div>
-          </li>
+          <li className="text-base-content/40">All holes</li>
         </ul>
+      </nav>
+
+      <div className="gap-snug flex flex-wrap items-center justify-between">
+        <div className="gap-tight flex flex-col">
+          <h1 className="page-title">Holes</h1>
+          <p className="text-body text-base-content/60">
+            Each hole is a URL that captures every request sent to it.
+          </p>
+        </div>
+        {holes.length > 0 ? createButton() : null}
       </div>
-      <button onClick={handleCreateHole} className="btn btn-secondary">
-        create hole
-      </button>
-      {maybeHoleList()}
-    </>
+
+      {holes.length === 0 ? (
+        <EmptyState
+          title="No holes yet"
+          description="Create a hole to get a capture URL, then point any HTTP client at it."
+        >
+          {createButton()}
+        </EmptyState>
+      ) : (
+        holeList()
+      )}
+    </div>
   );
 };
 
