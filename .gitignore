@@ -23,6 +23,10 @@ dist-ssr
 *.sln
 *.sw?
 
+# Per-deployment Compose settings (WEB_PORT); holds no secrets, but the port a
+# given host publishes on is that host's business, not the repo's.
+.env
+
 # Obsolete since the SQLite migration; ignored so stale local copies stay invisible.
 .env.keys
 .env.docker
