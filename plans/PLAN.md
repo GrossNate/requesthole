@@ -52,4 +52,4 @@ Durable decisions that apply across all tasks.
 
 - [x] 0001 · Dockerize the stack (Compose: backend + Nginx/frontend + Postgres) → tasks/done/0001-docker-compose.md
 - [x] 0002 · Migrate Postgres → SQLite (after 0001) → tasks/done/0002-sqlite-migration.md
-- [ ] 0003 · Rewrite README install/deploy for Docker Compose (after 0001) → tasks/0003-readme-docker-install.md
+- [>] 0003 · Rewrite README install/deploy for Docker Compose (after 0001) → tasks/0003-readme-docker-install.md
