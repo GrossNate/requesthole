@@ -44,6 +44,9 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.clearAllMocks();
+  // Teardown belongs in the hook: a failing assertion inside a test body would
+  // otherwise leave the URL global stubbed for everything after it.
+  vi.unstubAllGlobals();
 });
 
 describe("Request detail", () => {
@@ -79,7 +82,7 @@ describe("Request body", () => {
     vi.mocked(holeService.getRequest).mockResolvedValue(
       captured('{"content-type":"application/json"}'),
     );
-    vi.mocked(holeService.getBody).mockResolvedValue({ hello: "world" });
+    vi.mocked(holeService.getBody).mockResolvedValue('{"hello":"world"}');
     renderRequest();
 
     await screen.findByText(/hello/);
@@ -102,8 +105,10 @@ describe("Request body", () => {
   // Captured bodies are attacker-controlled and must never be navigated to on
   // this origin, whatever headers the endpoint sets.
   it("offers a PDF as a locally-built download, never a link to the body URL", async () => {
-    const createObjectURL = vi.fn(() => "blob:fake");
-    vi.stubGlobal("URL", { ...URL, createObjectURL, revokeObjectURL: vi.fn() });
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn(() => "blob:fake"),
+      revokeObjectURL: vi.fn(),
+    });
     vi.mocked(holeService.getRequest).mockResolvedValue(
       captured('{"content-type":"application/pdf"}'),
     );
@@ -114,9 +119,79 @@ describe("Request body", () => {
       expect(download.getAttribute("href")).toBe("blob:fake"),
     );
     expect(download).toHaveAttribute("download");
+    // The accessible name never contains the href, so asserting on the name
+    // would pass for any implementation. Assert on the href itself.
+    expect(download.getAttribute("href")).not.toMatch(/\/api\/request/);
+  });
+
+  // Under StrictMode the first effect run is always cleaned up before its fetch
+  // resolves, so a blob built afterwards would never be revoked.
+  it("revokes a blob whose fetch lands after the viewer is gone", async () => {
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn(() => "blob:fake"),
+      revokeObjectURL,
+    });
+    let resolveBytes: (bytes: ArrayBuffer) => void = () => {};
+    vi.mocked(holeService.getBodyBytes).mockReturnValue(
+      new Promise((resolve) => {
+        resolveBytes = resolve;
+      }),
+    );
+    vi.mocked(holeService.getRequest).mockResolvedValue(
+      captured('{"content-type":"application/pdf"}'),
+    );
+    const { unmount } = renderRequest();
+    // Not by link role — until the bytes land the anchor has no href, so it is
+    // not a link yet.
+    await screen.findByText(/download pdf/i);
+
+    unmount();
+    resolveBytes(new ArrayBuffer(8));
+
+    await waitFor(() =>
+      expect(revokeObjectURL).toHaveBeenCalledWith("blob:fake"),
+    );
+  });
+});
+
+describe("Request load state", () => {
+  // Rendering the "no headers" empty state before the fetch resolves — and
+  // forever after it fails — states something untrue about the request.
+  it("waits for the first load rather than claiming there were no headers", () => {
+    vi.mocked(holeService.getRequest).mockReturnValue(new Promise(() => {}));
+    renderRequest();
+
+    expect(screen.queryByText(/no headers/i)).not.toBeInTheDocument();
+  });
+
+  it("reports a failed load rather than claiming there were no headers", async () => {
+    vi.mocked(holeService.getRequest).mockRejectedValue(new Error("offline"));
+    renderRequest();
+
     expect(
-      screen.queryByRole("link", { name: /\/api\/request/ }),
-    ).not.toBeInTheDocument();
-    vi.unstubAllGlobals();
+      await screen.findByText(/couldn't load this request/i),
+    ).toBeVisible();
+    expect(screen.queryByText(/no headers/i)).not.toBeInTheDocument();
+  });
+
+  // The address reaches API URLs and the download filename straight from the
+  // route, exactly as the hole address does.
+  it("refuses an address that is not a real request address", async () => {
+    render(
+      <MemoryRouter initialEntries={["/view/abc123/a%2F..%2Fapi"]}>
+        <Routes>
+          <Route
+            path="/view/:hole_address/:request_address"
+            element={<Request />}
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByText(/not a valid request address/i),
+    ).toBeVisible();
+    expect(holeService.getRequest).not.toHaveBeenCalled();
   });
 });

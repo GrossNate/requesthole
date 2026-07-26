@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import holeService from "./services";
 import Home from "./components/Home";
 import Hole from "./components/Hole";
@@ -12,7 +12,8 @@ function App() {
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const navigate = useNavigate();
 
-  useEffect(() => {
+  const loadHoles = useCallback(() => {
+    setLoadState("loading");
     holeService
       .getHoles()
       .then((responseHoles) => {
@@ -24,6 +25,10 @@ function App() {
         setLoadState("failed");
       });
   }, []);
+
+  useEffect(() => {
+    loadHoles();
+  }, [loadHoles]);
 
   const createHole = async () => {
     const result = await holeService.addHole();
@@ -111,6 +116,7 @@ function App() {
                 holes={holes}
                 setHoles={setHoles}
                 createHole={createHole}
+                reloadHoles={loadHoles}
                 loadState={loadState}
               />
             }

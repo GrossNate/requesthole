@@ -1,11 +1,13 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
+import type { LoadState } from "../types";
 import Home from "./Home";
 
 const renderHome = (
   holes: { hole_address: string }[],
-  loadState: "loading" | "loaded" | "failed" = "loaded",
+  loadState: LoadState = "loaded",
 ) =>
   render(
     <MemoryRouter>
@@ -13,6 +15,7 @@ const renderHome = (
         holes={holes}
         setHoles={vi.fn()}
         createHole={vi.fn()}
+        reloadHoles={vi.fn()}
         loadState={loadState}
       />
     </MemoryRouter>,
@@ -43,6 +46,31 @@ describe("Home", () => {
 
     expect(screen.getByText(/couldn't load your holes/i)).toBeVisible();
     expect(screen.queryByText(/no holes yet/i)).not.toBeInTheDocument();
+  });
+
+  // A failed load must not be a dead end: before this state existed the create
+  // button rendered unconditionally, so a backend blip left the page usable.
+  it("still lets the user act after a failed load", async () => {
+    const user = userEvent.setup();
+    const reloadHoles = vi.fn();
+    const createHole = vi.fn();
+    render(
+      <MemoryRouter>
+        <Home
+          holes={[]}
+          setHoles={vi.fn()}
+          createHole={createHole}
+          reloadHoles={reloadHoles}
+          loadState="failed"
+        />
+      </MemoryRouter>,
+    );
+
+    await user.click(screen.getByRole("button", { name: /try again/i }));
+    expect(reloadHoles).toHaveBeenCalledOnce();
+
+    await user.click(screen.getByRole("button", { name: /create hole/i }));
+    expect(createHole).toHaveBeenCalledOnce();
   });
 
   it("gives the hole list a real column header", () => {

@@ -1,31 +1,45 @@
 import { useState, useEffect, type MouseEventHandler } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import holeService from "../services";
-import { type RequestObject } from "../types";
+import { type RequestObject, type LoadState } from "../types";
 import { formatQueryParams, formatTimestamp } from "../utils/format";
 import { holeCaptureUrl } from "../utils/holeUrl";
+import { isAddress } from "../utils/address";
 import CopyButton from "./CopyButton";
 import EmptyState from "./EmptyState";
 import MethodBadge from "./MethodBadge";
 
-type LoadState = "loading" | "loaded" | "failed";
+/** Newest-wins merge that cannot produce two rows with the same address. */
+const mergeRequests = (...groups: RequestObject[][]): RequestObject[] => {
+  const byAddress = new Map<string, RequestObject>();
+  for (const request of groups.flat()) {
+    byAddress.set(request.request_address, request);
+  }
+  return [...byAddress.values()];
+};
 
-const Hole = () => {
+const HoleView = ({ holeAddress }: { holeAddress: string }) => {
   const [holeRequests, setHoleRequests] = useState<RequestObject[]>([]);
   const [loadState, setLoadState] = useState<LoadState>("loading");
-  const { hole_address } = useParams();
   const navigate = useNavigate();
-  const holeFullUrl = holeCaptureUrl(hole_address ?? "");
+  const holeFullUrl = holeCaptureUrl(holeAddress);
 
   useEffect(() => {
+    // The render below refuses a malformed address, but the effect runs first
+    // and would otherwise put it straight into a request path — `useParams`
+    // decodes it, so "a%2F..%2Fapi" becomes a traversal the caller chose.
+    if (!isAddress(holeAddress)) return;
+
     let current = true;
 
     setLoadState("loading");
     holeService
-      .getRequests(hole_address ?? "")
+      .getRequests(holeAddress)
       .then((holeData) => {
         if (!current) return;
-        setHoleRequests(holeData);
+        // Merge rather than replace: a capture can arrive on the stream before
+        // this snapshot resolves, and the snapshot predates it.
+        setHoleRequests((streamed) => mergeRequests(holeData, streamed));
         setLoadState("loaded");
       })
       .catch((error) => {
@@ -34,10 +48,10 @@ const Hole = () => {
       });
 
     const sse = new EventSource(
-      `${holeService.BASE_URL}/api/hole/${hole_address}/events`,
+      `${holeService.BASE_URL}/api/hole/${encodeURIComponent(holeAddress)}/events`,
     );
     sse.onmessage = (event) => {
-      setHoleRequests((prev) => [...prev, JSON.parse(event.data)]);
+      setHoleRequests((prev) => mergeRequests(prev, [JSON.parse(event.data)]));
     };
     sse.onerror = () => {
       sse.close();
@@ -46,7 +60,7 @@ const Hole = () => {
       current = false;
       sse.close();
     };
-  }, [hole_address]);
+  }, [holeAddress]);
 
   const handleDeleteRequest = (request_address: string) => {
     const handler: MouseEventHandler = (event) => {
@@ -69,7 +83,7 @@ const Hole = () => {
   };
 
   const requestLink = (request: RequestObject) =>
-    `/view/${hole_address}/${request.request_address}`;
+    `/view/${holeAddress}/${request.request_address}`;
 
   const requestTable = () => (
     <div className="scroll-pane">
@@ -100,7 +114,14 @@ const Hole = () => {
             return (
               <tr
                 key={request.request_address}
-                onClick={() => navigate(requestLink(request))}
+                onClick={(event) => {
+                  // The path cell's link navigates on its own. Without this the
+                  // row navigates too, pushing a second identical history entry
+                  // and breaking Back — and on a modified click it would open a
+                  // tab *and* move the current one.
+                  if ((event.target as HTMLElement).closest("a")) return;
+                  navigate(requestLink(request));
+                }}
                 className="hover:bg-base-200/60 border-base-300 cursor-pointer"
               >
                 <td>
@@ -212,7 +233,7 @@ const Hole = () => {
           </li>
           <li className="text-base-content/40">
             <span>
-              Hole <span className="address">{hole_address}</span>
+              Hole <span className="address">{holeAddress}</span>
             </span>
           </li>
         </ul>
@@ -220,7 +241,7 @@ const Hole = () => {
 
       <div className="gap-snug flex flex-col">
         <h1 className="page-title">
-          Hole <span className="text-primary address">{hole_address}</span>
+          Hole <span className="text-primary address">{holeAddress}</span>
         </h1>
         <div className="border-base-300 bg-base-200/50 gap-snug px-gutter py-tight rounded-box flex flex-wrap items-center border">
           <span className="section-label">Capture URL</span>
@@ -234,6 +255,17 @@ const Hole = () => {
       {listing()}
     </div>
   );
+};
+
+/**
+ * Keyed on the address so React discards the whole view when it changes. The
+ * route reuses one instance otherwise, and the effect that clears the previous
+ * hole's rows runs after paint — long enough to show one hole's captures under
+ * another hole's heading.
+ */
+const Hole = () => {
+  const { hole_address } = useParams();
+  return <HoleView key={hole_address} holeAddress={hole_address ?? ""} />;
 };
 
 export default Hole;

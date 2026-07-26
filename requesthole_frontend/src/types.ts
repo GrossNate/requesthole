@@ -10,6 +10,7 @@ export interface HomeBlockProps {
   holes: holeObject[];
   setHoles: UseStateSetter<holeObject[]>;
   createHole: () => void;
+  reloadHoles: () => void;
   loadState: LoadState;
 }
 

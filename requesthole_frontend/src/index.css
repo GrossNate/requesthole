@@ -71,7 +71,7 @@
 }
 
 @theme {
-  /* Type scale. Six named steps, deliberately narrow — a request inspector is
+  /* Type scale. Five named steps, deliberately narrow — a request inspector is
    * a dense reading surface, so the body/caption end carries most of the work.
    * Use these (text-body, text-title, …) instead of Tailwind's numeric sizes. */
   --text-caption: 0.75rem;
@@ -85,9 +85,6 @@
   --text-title--line-height: 1.7rem;
   --text-heading: 1.625rem;
   --text-heading--line-height: 2.1rem;
-  --text-display: 2.125rem;
-  --text-display--line-height: 2.5rem;
-  --text-display--letter-spacing: -0.02em;
 
   /* Spacing rhythm. Named steps so padding and gaps agree across pages
    * instead of drifting between p-3, ps-3 and pl-3. */

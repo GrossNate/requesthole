@@ -3,8 +3,6 @@ import type { ReactNode } from "react";
 type EmptyStateProps = {
   title: string;
   description?: ReactNode;
-  /** Optional decorative mark shown above the title. */
-  icon?: ReactNode;
   /**
    * Drop the panel and shrink the type, for surfaces too small to carry it —
    * a dropdown menu, a narrow side column.
@@ -22,7 +20,6 @@ type EmptyStateProps = {
 const EmptyState = ({
   title,
   description,
-  icon,
   compact = false,
   children,
 }: EmptyStateProps) => (
@@ -33,7 +30,6 @@ const EmptyState = ({
         : "border-base-300 bg-base-200/40 gap-snug px-gutter py-section rounded-box flex flex-col items-center border border-dashed text-center"
     }
   >
-    {icon && !compact ? <div className="text-primary/70">{icon}</div> : null}
     <h2
       className={
         compact

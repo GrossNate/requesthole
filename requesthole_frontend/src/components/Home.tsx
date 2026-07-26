@@ -10,6 +10,7 @@ const Home: React.FC<HomeBlockProps> = ({
   holes,
   setHoles,
   createHole,
+  reloadHoles,
   loadState,
 }) => {
   const handleDeleteHole = (hole_address: string) => {
@@ -34,11 +35,11 @@ const Home: React.FC<HomeBlockProps> = ({
     createHole();
   };
 
-  const createButton = () => (
+  const createButton = (variant = "btn-primary") => (
     <button
       type="button"
       onClick={handleCreateHole}
-      className="btn btn-primary gap-tight"
+      className={`btn gap-tight ${variant}`}
     >
       <span aria-hidden="true" className="text-lead leading-none">
         +
@@ -97,11 +98,24 @@ const Home: React.FC<HomeBlockProps> = ({
       );
     }
     if (loadState === "failed") {
+      // A failed load must stay actionable — retrying and creating both work
+      // without the list, and a dead end here means a full page reload.
       return (
         <EmptyState
           title="Couldn't load your holes"
-          description="The backend didn't answer. Check that it's running, then reload."
-        />
+          description="The backend didn't answer. Check that it's running, then try again."
+        >
+          <div className="gap-tight flex flex-wrap justify-center">
+            <button
+              type="button"
+              onClick={() => reloadHoles()}
+              className="btn btn-sm btn-primary"
+            >
+              Try again
+            </button>
+            {createButton("btn-sm btn-outline")}
+          </div>
+        </EmptyState>
       );
     }
     if (holes.length === 0) {

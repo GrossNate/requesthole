@@ -1,7 +1,5 @@
 import holeService from "../services";
-
-/** The address format the backend validates against, mirrored client-side. */
-const HOLE_ADDRESS = /^[a-zA-Z0-9]{6}$/;
+import { isAddress } from "./address";
 
 /**
  * The absolute URL an HTTP client should be pointed at to be captured by a
@@ -24,7 +22,7 @@ export function holeCaptureUrl(
   apiBaseUrl: string = holeService.BASE_URL,
   pageOrigin: string = window.location.origin,
 ): string | null {
-  if (!HOLE_ADDRESS.test(holeAddress)) return null;
+  if (!isAddress(holeAddress)) return null;
 
   const base = apiBaseUrl === "" ? pageOrigin : apiBaseUrl;
   return `${base.replace(/\/+$/, "")}/${holeAddress}`;

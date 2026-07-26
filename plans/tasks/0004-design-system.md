@@ -137,3 +137,57 @@ raised 18 findings. The user read the review and approved fixing all of them exc
   `CopyButton`'s failure branch had no coverage at all. Suite went from 24 tests to 44.
 
 **Deliberately not changed:** the navbar's hole-count indicator (user's call).
+
+**Review round 3** — the panel re-ran against the fixed branch and raised 21 more findings, two of
+them regressions the round-two fixes had introduced. The user approved fixing all 21. Security
+returned clean, having re-verified the address validation and the blob download.
+
+The two regressions, both mine:
+
+- **A failed load was a dead end** (`Home.tsx`). The new `loadState === "failed"` branch ran before
+  the empty branch and rendered a panel with no controls, while the header's create button was
+  gated on `holes.length > 0`. Before the LoadState work that button rendered unconditionally. The
+  failed state now carries "Try again" (wired to a new `reloadHoles` from `App`) and a create
+  button.
+- **Path clicks navigated twice** (`Hole.tsx`). The new row-level `onClick` fired after the link's
+  own handler, pushing two identical history entries — Back appeared broken, and a modified click
+  opened a tab *and* moved the current one. The row handler now bails when the click originated
+  inside an anchor.
+
+Also fixed:
+
+- **`getBody` pinned to `responseType: "text"`** with an identity transform. axios was JSON-parsing
+  any string body it could, so a captured `text/plain` body of `"hello"` lost its quotes. A request
+  inspector has to show the bytes as sent. *(Pre-existing, not introduced here.)*
+- **SSE no longer loses a race with the first fetch.** Both started in the same tick and the
+  fetch's snapshot replaced the list wholesale, discarding anything that had already streamed in.
+  Both paths now merge through `mergeRequests`, which is also dedupe by address.
+  *(Pre-existing.)*
+- **The view is keyed on the hole address**, so switching holes cannot paint the previous hole's
+  rows under the new heading for a frame.
+- **Address validation moved into the effect too.** The guard was render-only, so the effect had
+  already fetched and opened an EventSource with the raw value — and `useParams` decodes, so
+  `/view/a%2F..%2Fapi` normalised into a path the caller chose. `isAddress` now lives in
+  `utils/address.ts` and gates `Request.tsx` as well, which had no validation at all.
+- **`Request` got the same `LoadState`**; it previously claimed "No headers captured" while loading
+  and permanently after a failed fetch.
+- **The PDF blob effect got a cancellation guard.** StrictMode cleans up the first run before its
+  fetch resolves, so every mount leaked one blob holding the whole file.
+- Removed the unused `EmptyState` `icon` prop and the unused `--text-display` token.
+
+Test work, prompted by the Standards lens mutation-testing the suite (16 mutations, 14 caught):
+
+- The empty-state capture-URL assertion searched the whole document and passed with the URL deleted
+  from the panel; it is now scoped with `within`.
+- The absolute-URL match was ambiguous with the row's own `/abc123` path link; it is now anchored.
+- `queryByRole("link", { name: /\/api\/request/ })` could not fail for any implementation — a
+  *ByRole `name` matches the accessible name, never the href. It asserts the href now.
+- Added coverage for the CopyButton timer reset, the dropdown's compact empty state, the params
+  placeholder, `MethodBadge`, and the blob revoke.
+- Moved the `URL` global stub teardown into `afterEach`.
+
+Suite: 44 → 61 tests.
+
+**Bookkeeping:** `plans/tasks/0005-body-viewer.md` had the render-phase fetch fix and the download
+link as its own AFK items. Both are done; that file now records them as met in 0004 so they are
+not built twice.

@@ -1,11 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, Link } from "react-router-dom";
 import type { RequestObject } from "../types";
 import holeService from "../services";
 import { formatTimestamp } from "../utils/format";
 import Hole from "./Hole";
+
+// Only the component's own `useNavigate` is redirected here — <Link> keeps its
+// internal binding, so this distinguishes the row navigating from the link
+// navigating.
+const navigateSpy = vi.fn();
+vi.mock("react-router-dom", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("react-router-dom")>()),
+  useNavigate: () => navigateSpy,
+}));
 
 vi.mock("../services", () => ({
   default: {
@@ -15,12 +24,22 @@ vi.mock("../services", () => ({
   },
 }));
 
-// jsdom has no EventSource. The live stream is task 0006's concern; here it
-// only has to exist so the component can mount.
-class StubEventSource {
-  onmessage: ((event: MessageEvent) => void) | null = null;
-  onerror: (() => void) | null = null;
-  close = vi.fn();
+// jsdom has no EventSource. The stub records what was opened and hands the
+// most recent instance back, so tests can push a message through the stream.
+type StubEventSource = {
+  onmessage: ((event: MessageEvent) => void) | null;
+  onerror: (() => void) | null;
+  close: () => void;
+};
+const eventSourceUrls: string[] = [];
+let lastEventSource: StubEventSource | null = null;
+
+// A plain function, not an arrow: the component calls it with `new`. Returning
+// an object makes that construction yield the stub.
+function StubEventSource(url: string): StubEventSource {
+  eventSourceUrls.push(url);
+  lastEventSource = { onmessage: null, onerror: null, close: vi.fn() };
+  return lastEventSource;
 }
 vi.stubGlobal("EventSource", StubEventSource);
 
@@ -46,6 +65,9 @@ const renderHole = () =>
   );
 
 beforeEach(() => {
+  vi.clearAllMocks();
+  eventSourceUrls.length = 0;
+  lastEventSource = null;
   vi.mocked(holeService.getRequests).mockResolvedValue([]);
 });
 
@@ -99,6 +121,40 @@ describe("Hole request list", () => {
       .filter((link) => link.getAttribute("href") === "/view/abc123/req001");
     expect(rowLinks).toHaveLength(1);
   });
+
+  // The row handler and the link handler both navigated, so a click on the link
+  // pushed two identical history entries and Back appeared broken. The link
+  // does its own navigating; the row must stay out of the way.
+  it("leaves navigation to the link when the link itself is clicked", async () => {
+    const user = userEvent.setup();
+    vi.mocked(holeService.getRequests).mockResolvedValue([capturedRequest()]);
+    renderHole();
+    await screen.findByText("probe=1");
+
+    await user.click(screen.getByRole("link", { name: "/abc123" }));
+
+    expect(navigateSpy).not.toHaveBeenCalled();
+  });
+
+  it("navigates itself when the row is clicked away from the link", async () => {
+    const user = userEvent.setup();
+    vi.mocked(holeService.getRequests).mockResolvedValue([capturedRequest()]);
+    renderHole();
+    await screen.findByText("probe=1");
+
+    await user.click(screen.getByText("POST"));
+
+    expect(navigateSpy).toHaveBeenCalledExactlyOnceWith("/view/abc123/req001");
+  });
+
+  it("still shows a placeholder for a request that carried no params", async () => {
+    vi.mocked(holeService.getRequests).mockResolvedValue([
+      capturedRequest({ query_params: "{}" }),
+    ]);
+    renderHole();
+
+    expect(await screen.findByText("—")).toBeVisible();
+  });
 });
 
 describe("Hole capture URL", () => {
@@ -108,10 +164,10 @@ describe("Hole capture URL", () => {
     vi.mocked(holeService.getRequests).mockResolvedValue([capturedRequest()]);
     renderHole();
 
-    const shown = await screen.findByText(/\/abc123$/);
-    // Pinned against a literal shape, not just against the same global the
-    // component reads, so a bare path cannot pass.
-    expect(shown.textContent).toMatch(/^https?:\/\/[^/]+\/abc123$/);
+    // Matched against the absolute shape, not just the same global the
+    // component reads — and anchored, so the row's own "/abc123" path link
+    // cannot satisfy it either.
+    const shown = await screen.findByText(/^https?:\/\/[^/]+\/abc123$/);
 
     await user.click(screen.getByRole("button", { name: /copy/i }));
     await expect(navigator.clipboard.readText()).resolves.toBe(
@@ -134,16 +190,99 @@ describe("Hole capture URL", () => {
       screen.queryByRole("button", { name: /copy/i }),
     ).not.toBeInTheDocument();
   });
+
+  // useParams decodes the segment, so "/view/a%2F..%2Fapi" becomes "a/../api"
+  // and the browser would normalise the SSE URL into a path the caller chose.
+  it("issues no requests at all for an address it has rejected", async () => {
+    render(
+      <MemoryRouter initialEntries={["/view/a%2F..%2Fapi"]}>
+        <Routes>
+          <Route path="/view/:hole_address" element={<Hole />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await screen.findByText(/not a valid hole address/i);
+
+    expect(holeService.getRequests).not.toHaveBeenCalled();
+    expect(eventSourceUrls).toEqual([]);
+  });
+});
+
+describe("Hole live stream", () => {
+  // The fetch and the stream start in the same tick. A capture landing first
+  // was wiped out by the fetch's snapshot, which predated it.
+  it("keeps a streamed request that arrives before the first fetch resolves", async () => {
+    let resolveRequests: (requests: RequestObject[]) => void = () => {};
+    vi.mocked(holeService.getRequests).mockReturnValue(
+      new Promise((resolve) => {
+        resolveRequests = resolve;
+      }),
+    );
+    renderHole();
+
+    act(() => {
+      lastEventSource!.onmessage!({
+        data: JSON.stringify(
+          capturedRequest({ request_address: "live01", method: "PATCH" }),
+        ),
+      } as MessageEvent);
+    });
+    resolveRequests([]);
+
+    expect(await screen.findByText("PATCH")).toBeVisible();
+  });
+
+  it("does not duplicate a request present in both the fetch and the stream", async () => {
+    vi.mocked(holeService.getRequests).mockResolvedValue([capturedRequest()]);
+    renderHole();
+    await screen.findByText("probe=1");
+
+    act(() => {
+      lastEventSource!.onmessage!({
+        data: JSON.stringify(capturedRequest()),
+      } as MessageEvent);
+    });
+
+    expect(screen.getAllByText("probe=1")).toHaveLength(1);
+  });
+
+  // The route reuses one Hole instance across addresses, so state outlived the
+  // address it belonged to for a frame.
+  it("does not show one hole's requests under another hole's heading", async () => {
+    const user = userEvent.setup();
+    vi.mocked(holeService.getRequests).mockResolvedValue([
+      capturedRequest({ request_path: "/aaaaaa" }),
+    ]);
+    render(
+      <MemoryRouter initialEntries={["/view/aaaaaa"]}>
+        <Link to="/view/bbbbbb">switch hole</Link>
+        <Routes>
+          <Route path="/view/:hole_address" element={<Hole />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await screen.findByText("/aaaaaa");
+
+    // The second hole's fetch never settles, so anything still on screen came
+    // from the first hole.
+    vi.mocked(holeService.getRequests).mockReturnValue(new Promise(() => {}));
+    await user.click(screen.getByRole("link", { name: "switch hole" }));
+
+    expect(screen.queryByText("/aaaaaa")).not.toBeInTheDocument();
+    expect(screen.getAllByText("bbbbbb").length).toBeGreaterThan(0);
+  });
 });
 
 describe("Hole empty state", () => {
   it("tells the user to send a request, showing the hole's capture URL", async () => {
     renderHole();
 
-    expect(await screen.findByText(/no requests/i)).toBeVisible();
+    const panel = (await screen.findByText(/no requests/i)).closest("div")!;
+    // Scoped to the panel: the page header shows the same URL, so a document
+    // -wide query would pass with the empty state's copy of it deleted.
     expect(
-      screen.getAllByText(`${window.location.origin}/abc123`).length,
-    ).toBeGreaterThan(0);
+      within(panel).getByText(`${window.location.origin}/abc123`),
+    ).toBeVisible();
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
   });
 

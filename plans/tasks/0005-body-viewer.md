@@ -63,9 +63,15 @@ Research on real-world webhook traffic (see Source) found `application/json` dom
 
 - [ ] Write a media-type parser (type, subtype, structured suffix, parameters) with tests, and
       dispatch on its output. No substring matching on the raw header.
-- [ ] Move body fetching into a proper effect keyed on the request address, eliminating the
-      render-phase fetch loop. Test that one mount issues one fetch.
-- [ ] Fetch the body as bytes and decode per the charset parameter, defaulting to UTF-8.
+- [x] ~~Move body fetching into a proper effect keyed on the request address, eliminating the
+      render-phase fetch loop. Test that one mount issues one fetch.~~ **Done in task 0004** — the
+      render-phase fetch was an unbounded request loop for JSON bodies, live on `main`, so it was
+      fixed while the component was being restyled. `Request.tsx` fetches in a `useEffect` keyed on
+      the request address, and `Request.test.tsx` asserts one mount issues one fetch.
+- [ ] Fetch the body as bytes and decode per the charset parameter, defaulting to UTF-8. **Note:**
+      0004 added `holeService.getBodyBytes()` (`responseType: "arraybuffer"`) for the PDF download —
+      reuse it rather than adding another. `getBody()` was also pinned to `responseType: "text"`
+      with an identity transform in 0004, so axios no longer silently JSON-parses captured bodies.
 - [ ] Implement the structured-text renderer: JSON, XML, YAML, NDJSON, pretty-printed, with tests per
       format including malformed-input fallback.
 - [ ] Implement the form-encoded renderer with a key/value table, plus nested-JSON pretty-printing for
@@ -73,7 +79,11 @@ Research on real-world webhook traffic (see Source) found `application/json` dom
 - [ ] Implement `multipart/form-data` boundary parsing and per-part rendering, with tests covering
       multiple parts, a file part with a filename, and a part whose own content-type is an image.
 - [ ] Implement the binary/unknown renderer: byte size, hex/ASCII preview, download link. Test that an
-      unrecognized content-type renders this rather than nothing.
+      unrecognized content-type renders this rather than nothing. **Note:** 0004 already built the
+      download path — the bytes are fetched and handed over as an app-owned `application/octet-stream`
+      blob URL with `<a download>`, never a link to the body endpoint (the PDF branch of
+      `Request.tsx`). Reuse that shape here; do not re-derive it, and keep the cancellation guard
+      that revokes a blob whose fetch lands after cleanup.
 - [ ] Keep inline image rendering working for `image/*`.
 - [ ] Wire in highlight.js with only the four languages registered, themed to match 0004's palette.
 - [ ] Implement the ~256 KB display cap with a truncation marker and a full-body download link; test
@@ -101,5 +111,6 @@ Research on real-world webhook traffic (see Source) found `application/json` dom
       empty panel.
 - [ ] An HTML body is shown as escaped source and is never rendered as markup.
 - [ ] A body over the display cap shows a truncation marker and offers a full download.
-- [ ] Mounting the detail view issues exactly one body fetch; no render-phase side effects remain.
+- [x] Mounting the detail view issues exactly one body fetch; no render-phase side effects remain.
+      *(Met in task 0004; keep it true.)*
 - [ ] `nosniff` and `content-disposition: attachment` on the body endpoint are unchanged.

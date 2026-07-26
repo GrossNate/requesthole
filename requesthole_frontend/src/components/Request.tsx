@@ -1,8 +1,13 @@
 import { useState, useEffect } from "react";
 import { Link, useParams } from "react-router-dom";
 import holeService from "../services";
-import { type RequestObject, type RequestHeadersObject } from "../types";
+import {
+  type RequestObject,
+  type RequestHeadersObject,
+  type LoadState,
+} from "../types";
 import { formatTimestamp } from "../utils/format";
+import { isAddress } from "../utils/address";
 import EmptyState from "./EmptyState";
 import MethodBadge from "./MethodBadge";
 
@@ -90,7 +95,7 @@ const RequestBody = ({
       .getBody(requestAddress)
       .then((data) => {
         if (!current) return;
-        setText(typeof data === "string" ? data : JSON.stringify(data));
+        setText(data);
       })
       .catch((error) => console.error(error));
 
@@ -101,6 +106,7 @@ const RequestBody = ({
 
   useEffect(() => {
     if (!isPdf) return;
+    let cancelled = false;
     let objectUrl: string | undefined;
 
     holeService
@@ -108,14 +114,23 @@ const RequestBody = ({
       .then((bytes) => {
         // application/octet-stream, not application/pdf: even a blob: URL the
         // app owns should never be something a browser will render inline.
-        objectUrl = URL.createObjectURL(
+        const url = URL.createObjectURL(
           new Blob([bytes], { type: "application/octet-stream" }),
         );
-        setDownloadUrl(objectUrl);
+        // StrictMode cleans up the first effect run before this resolves, so
+        // without this the blob would be built after cleanup and never revoked
+        // — an orphan holding the whole file for the tab's lifetime.
+        if (cancelled) {
+          URL.revokeObjectURL(url);
+          return;
+        }
+        objectUrl = url;
+        setDownloadUrl(url);
       })
       .catch((error) => console.error(error));
 
     return () => {
+      cancelled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
       setDownloadUrl(undefined);
     };
@@ -166,15 +181,56 @@ const RequestBody = ({
   return null;
 };
 
+const RequestBreadcrumbs = ({
+  holeAddress,
+  requestAddress,
+}: {
+  holeAddress: string | undefined;
+  requestAddress?: string;
+}) => (
+  <nav className="breadcrumbs text-caption py-0">
+    <ul>
+      <li>
+        <Link to="/" className="text-base-content/60 hover:text-primary">
+          All holes
+        </Link>
+      </li>
+      <li>
+        <Link
+          to={`/view/${holeAddress}`}
+          className="text-base-content/60 hover:text-primary"
+        >
+          <span>
+            Hole <span className="address">{holeAddress}</span>
+          </span>
+        </Link>
+      </li>
+      {requestAddress ? (
+        <li className="text-base-content/40">
+          <span>
+            Request <span className="address">{requestAddress}</span>
+          </span>
+        </li>
+      ) : null}
+    </ul>
+  </nav>
+);
+
 const Request = () => {
   const [request, setRequest] = useState<RequestObject>();
+  const [loadState, setLoadState] = useState<LoadState>("loading");
   const { request_address, hole_address } = useParams();
+  const addressIsValid = isAddress(request_address);
 
   useEffect(() => {
+    // Same reasoning as the hole address: this value comes from the route and
+    // is interpolated into API URLs and the download filename.
+    if (!addressIsValid) return;
     let current = true;
 
+    setLoadState("loading");
     holeService
-      .getRequest(request_address ?? "")
+      .getRequest(request_address!)
       .then((requestData) => {
         if (!current) return;
         let headersObject: RequestHeadersObject = {};
@@ -184,41 +240,67 @@ const Request = () => {
           console.error(error);
         }
         setRequest({ ...requestData, headersObject });
+        setLoadState("loaded");
       })
-      .catch((error) => console.error(error));
+      .catch((error) => {
+        console.error(error);
+        if (current) setLoadState("failed");
+      });
 
     return () => {
       current = false;
     };
-  }, [request_address]);
+  }, [request_address, addressIsValid]);
+
+  if (!addressIsValid) {
+    return (
+      <div className="gap-gutter flex h-full flex-col">
+        <RequestBreadcrumbs holeAddress={hole_address} />
+        <EmptyState
+          title="That's not a valid request address"
+          description="A request address is exactly six letters or digits. Check the link you followed."
+        >
+          <Link to={`/view/${hole_address}`} className="btn btn-sm btn-primary">
+            Back to the hole
+          </Link>
+        </EmptyState>
+      </div>
+    );
+  }
+
+  const detail = () => {
+    if (loadState === "loading") {
+      return (
+        <p className="text-body text-base-content/50" role="status">
+          Loading request…
+        </p>
+      );
+    }
+    if (loadState === "failed" || !request) {
+      return (
+        <EmptyState
+          title="Couldn't load this request"
+          description="The backend didn't answer. Check that it's running, then reload."
+        />
+      );
+    }
+    return (
+      <div className="scroll-pane gap-gutter flex flex-col">
+        <RequestHeaders headers={request.headersObject ?? {}} />
+        <RequestBody
+          requestAddress={request_address!}
+          contentType={request.headersObject?.["content-type"]}
+        />
+      </div>
+    );
+  };
 
   return (
     <div className="gap-gutter flex h-full flex-col">
-      <nav className="breadcrumbs text-caption py-0">
-        <ul>
-          <li>
-            <Link to="/" className="text-base-content/60 hover:text-primary">
-              All holes
-            </Link>
-          </li>
-          <li>
-            <Link
-              to={`/view/${hole_address}`}
-              className="text-base-content/60 hover:text-primary"
-            >
-              <span>
-                Hole <span className="address">{hole_address}</span>
-              </span>
-            </Link>
-          </li>
-          <li className="text-base-content/40">
-            <span>
-              Request{" "}
-              <span className="address">{request?.request_address}</span>
-            </span>
-          </li>
-        </ul>
-      </nav>
+      <RequestBreadcrumbs
+        holeAddress={hole_address}
+        requestAddress={request?.request_address}
+      />
 
       <div className="gap-snug flex flex-wrap items-center">
         {request ? <MethodBadge method={request.method} /> : null}
@@ -231,15 +313,7 @@ const Request = () => {
         </span>
       </div>
 
-      <div className="scroll-pane gap-gutter flex flex-col">
-        <RequestHeaders headers={request?.headersObject ?? {}} />
-        {request ? (
-          <RequestBody
-            requestAddress={request_address ?? ""}
-            contentType={request.headersObject?.["content-type"]}
-          />
-        ) : null}
-      </div>
+      {detail()}
     </div>
   );
 };
