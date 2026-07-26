@@ -39,4 +39,15 @@ describe("formatQueryParams", () => {
     expect(formatQueryParams("not json")).toBe("not json");
     expect(formatQueryParams(null)).toBe("");
   });
+
+  // A querystring always parses to an object of pairs. Anything else is not a
+  // parameter set, so inventing index keys for it would misrepresent it.
+  it("falls back to the raw text for JSON that is not an object of pairs", () => {
+    expect(formatQueryParams('["x","y"]')).toBe('["x","y"]');
+    expect(formatQueryParams("42")).toBe("42");
+  });
+
+  it("renders a structured value as JSON rather than [object Object]", () => {
+    expect(formatQueryParams('{"a":{"b":1}}')).toBe('a={"b":1}');
+  });
 });

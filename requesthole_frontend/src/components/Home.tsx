@@ -6,7 +6,12 @@ import { type HomeBlockProps } from "../types";
 import type React from "react";
 import EmptyState from "./EmptyState";
 
-const Home: React.FC<HomeBlockProps> = ({ holes, setHoles, createHole }) => {
+const Home: React.FC<HomeBlockProps> = ({
+  holes,
+  setHoles,
+  createHole,
+  loadState,
+}) => {
   const handleDeleteHole = (hole_address: string) => {
     const handler: MouseEventHandler = (event) => {
       event.preventDefault();
@@ -83,6 +88,35 @@ const Home: React.FC<HomeBlockProps> = ({ holes, setHoles, createHole }) => {
     </div>
   );
 
+  const listing = () => {
+    if (loadState === "loading") {
+      return (
+        <p className="text-body text-base-content/50" role="status">
+          Loading holes…
+        </p>
+      );
+    }
+    if (loadState === "failed") {
+      return (
+        <EmptyState
+          title="Couldn't load your holes"
+          description="The backend didn't answer. Check that it's running, then reload."
+        />
+      );
+    }
+    if (holes.length === 0) {
+      return (
+        <EmptyState
+          title="No holes yet"
+          description="Create a hole to get a capture URL, then point any HTTP client at it."
+        >
+          {createButton()}
+        </EmptyState>
+      );
+    }
+    return holeList();
+  };
+
   return (
     <div className="gap-gutter flex h-full flex-col">
       <nav className="breadcrumbs text-caption py-0">
@@ -101,16 +135,7 @@ const Home: React.FC<HomeBlockProps> = ({ holes, setHoles, createHole }) => {
         {holes.length > 0 ? createButton() : null}
       </div>
 
-      {holes.length === 0 ? (
-        <EmptyState
-          title="No holes yet"
-          description="Create a hole to get a capture URL, then point any HTTP client at it."
-        >
-          {createButton()}
-        </EmptyState>
-      ) : (
-        holeList()
-      )}
+      {listing()}
     </div>
   );
 };

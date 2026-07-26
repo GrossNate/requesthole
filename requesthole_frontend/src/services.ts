@@ -73,6 +73,19 @@ async function getBody(requestAddress: string) {
   }
 }
 
+/**
+ * The captured body as raw bytes, for content the viewer hands over as a file
+ * rather than rendering. Fetching the bytes is what lets the download go
+ * through a blob the app creates, instead of navigating to the body endpoint.
+ */
+async function getBodyBytes(requestAddress: string): Promise<ArrayBuffer> {
+  const response = await axios.get<ArrayBuffer>(
+    `${BASE_URL}/api/request/${requestAddress}/body`,
+    { responseType: "arraybuffer" },
+  );
+  return response.data;
+}
+
 export default {
   addHole,
   getHoles,
@@ -82,5 +95,6 @@ export default {
   getRequest,
   deleteRequest,
   getBody,
+  getBodyBytes,
   BASE_URL,
 };

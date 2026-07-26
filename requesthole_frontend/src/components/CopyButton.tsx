@@ -91,8 +91,15 @@ const CopyButton = ({ value, label = "Copy", className }: CopyButtonProps) => {
       } ${className ?? ""}`}
     >
       {status === "copied" ? <CheckIcon /> : <ClipboardIcon />}
-      <span className="text-caption" aria-live="polite">
-        {text}
+      <span className="text-caption">{text}</span>
+      {/* The outcome is announced from here rather than from the label, so the
+          label reverting on a timer is not announced as a second event. */}
+      <span role="status" className="sr-only">
+        {status === "copied"
+          ? "Copied to clipboard"
+          : status === "failed"
+            ? "Could not copy to clipboard"
+            : ""}
       </span>
     </button>
   );

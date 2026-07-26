@@ -3,11 +3,13 @@ import holeService from "./services";
 import Home from "./components/Home";
 import Hole from "./components/Hole";
 import Request from "./components/Request";
-import { type holeObject } from "./types";
+import { type holeObject, type LoadState } from "./types";
 import { Routes, Route, Link, useNavigate } from "react-router-dom";
+import EmptyState from "./components/EmptyState";
 
 function App() {
   const [holes, setHoles] = useState<holeObject[]>([]);
+  const [loadState, setLoadState] = useState<LoadState>("loading");
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -15,8 +17,12 @@ function App() {
       .getHoles()
       .then((responseHoles) => {
         setHoles(responseHoles);
+        setLoadState("loaded");
       })
-      .catch((error) => console.error(error));
+      .catch((error) => {
+        console.error(error);
+        setLoadState("failed");
+      });
   }, []);
 
   const createHole = async () => {
@@ -66,8 +72,17 @@ function App() {
                 className="menu dropdown-content bg-base-200 border-base-300 rounded-box z-1 mt-tight w-56 border p-tight shadow-lg"
               >
                 {holes.length === 0 ? (
-                  <li className="text-caption text-base-content/50 px-snug py-tight">
-                    No holes yet
+                  <li>
+                    <EmptyState
+                      compact
+                      title={
+                        loadState === "failed"
+                          ? "Couldn't load holes"
+                          : loadState === "loading"
+                            ? "Loading…"
+                            : "No holes yet"
+                      }
+                    />
                   </li>
                 ) : (
                   holes.map((hole) => (
@@ -92,7 +107,12 @@ function App() {
           <Route
             path="/"
             element={
-              <Home holes={holes} setHoles={setHoles} createHole={createHole} />
+              <Home
+                holes={holes}
+                setHoles={setHoles}
+                createHole={createHole}
+                loadState={loadState}
+              />
             }
           />
           <Route

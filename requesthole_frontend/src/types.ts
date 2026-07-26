@@ -3,10 +3,14 @@ import type React from "react";
 type UseStateSetter<F> = React.Dispatch<React.SetStateAction<F>>;
 export type holeObject = { hole_address: string };
 
+/** Where a fetch has got to, so an empty list is never mistaken for no data. */
+export type LoadState = "loading" | "loaded" | "failed";
+
 export interface HomeBlockProps {
   holes: holeObject[];
   setHoles: UseStateSetter<holeObject[]>;
   createHole: () => void;
+  loadState: LoadState;
 }
 
 export interface RequestObject {

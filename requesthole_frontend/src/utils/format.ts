@@ -47,12 +47,20 @@ export function formatQueryParams(
   } catch {
     return queryParamsJson;
   }
-  if (typeof parsed !== "object" || parsed === null) return queryParamsJson;
+  // A querystring always parses to an object of pairs. An array or a scalar is
+  // not a parameter set, so it is shown as it was stored.
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return queryParamsJson;
+  }
+
+  const render = (value: unknown): string => {
+    if (Array.isArray(value)) return value.map(render).join(", ");
+    if (typeof value === "object" && value !== null)
+      return JSON.stringify(value);
+    return String(value);
+  };
 
   return Object.entries(parsed as Record<string, unknown>)
-    .map(([key, value]) => {
-      const rendered = Array.isArray(value) ? value.join(", ") : String(value);
-      return `${key}=${rendered}`;
-    })
+    .map(([key, value]) => `${key}=${render(value)}`)
     .join(" · ");
 }

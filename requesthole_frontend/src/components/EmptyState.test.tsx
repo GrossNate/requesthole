@@ -30,4 +30,24 @@ describe("EmptyState", () => {
       screen.getByText("https://requesthole.example/abc123"),
     ).toBeVisible();
   });
+
+  // Small surfaces — a dropdown, a side panel — get the same component rather
+  // than an ad-hoc line, so an empty list reads the same everywhere. The
+  // compact form drops the panel that would swamp a 224px menu.
+  it("drops the panel in its compact form but keeps the heading", () => {
+    const { container } = render(<EmptyState compact title="No holes yet" />);
+
+    expect(
+      screen.getByRole("heading", { name: "No holes yet" }),
+    ).toBeInTheDocument();
+    expect(container.firstElementChild?.className).not.toContain(
+      "border-dashed",
+    );
+  });
+
+  it("draws the panel in its default form", () => {
+    const { container } = render(<EmptyState title="No holes yet" />);
+
+    expect(container.firstElementChild?.className).toContain("border-dashed");
+  });
 });

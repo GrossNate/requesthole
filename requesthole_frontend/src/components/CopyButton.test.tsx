@@ -1,7 +1,11 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import CopyButton from "./CopyButton";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("CopyButton", () => {
   it("copies the value it was given", async () => {
@@ -19,9 +23,37 @@ describe("CopyButton", () => {
     const user = userEvent.setup();
     render(<CopyButton value="https://requesthole.example/abc123" />);
 
-    expect(screen.queryByText(/copied/i)).not.toBeInTheDocument();
+    expect(screen.queryByText("Copied")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /copy/i }));
 
-    expect(await screen.findByText(/copied/i)).toBeVisible();
+    expect(await screen.findByText("Copied")).toBeVisible();
+  });
+
+  // navigator.clipboard is absent on insecure origins, which is exactly when a
+  // silent no-op would be indistinguishable from a successful copy.
+  it("says so when the clipboard rejects", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(navigator.clipboard, "writeText").mockRejectedValue(
+      new Error("denied"),
+    );
+    render(<CopyButton value="https://requesthole.example/abc123" />);
+
+    await user.click(screen.getByRole("button", { name: /copy/i }));
+
+    expect(await screen.findByText("Copy failed")).toBeVisible();
+    expect(screen.queryByText("Copied")).not.toBeInTheDocument();
+  });
+
+  // The label reverting on a timer is not an event worth announcing; only the
+  // outcome of the click is.
+  it("announces the outcome once, from a region separate from the label", async () => {
+    const user = userEvent.setup();
+    render(<CopyButton value="https://requesthole.example/abc123" />);
+
+    await user.click(screen.getByRole("button", { name: /copy/i }));
+
+    const live = await screen.findByRole("status");
+    expect(live).toHaveTextContent("Copied to clipboard");
+    expect(live).not.toContainElement(screen.getByText("Copied"));
   });
 });
