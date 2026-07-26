@@ -31,12 +31,23 @@ function App() {
   }, [loadHoles]);
 
   const createHole = async () => {
-    const result = await holeService.addHole();
-    setHoles((prevHoles) => [
-      ...prevHoles,
-      { hole_address: result[0].hole_address },
-    ]);
-    navigate(`/view/${result[0].hole_address}`);
+    // Reachable from the failed-load panel, so the backend may well still be
+    // down. Without the catch the rejection went nowhere and the button read
+    // as doing nothing at all.
+    try {
+      const result = await holeService.addHole();
+      setHoles((prevHoles) => [
+        ...prevHoles,
+        { hole_address: result[0].hole_address },
+      ]);
+      // A successful create also clears a stale failure: the list is no longer
+      // unknown, and leaving it "failed" would report the new hole as lost.
+      setLoadState("loaded");
+      navigate(`/view/${result[0].hole_address}`);
+    } catch (error) {
+      console.error(error);
+      setLoadState("failed");
+    }
   };
 
   return (

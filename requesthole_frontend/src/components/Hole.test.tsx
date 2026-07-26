@@ -263,10 +263,12 @@ describe("Hole live stream", () => {
     );
     await screen.findByText("/aaaaaa");
 
-    // The second hole's fetch never settles, so anything still on screen came
-    // from the first hole.
-    vi.mocked(holeService.getRequests).mockReturnValue(new Promise(() => {}));
+    // The second hole resolves empty rather than hanging: a pending fetch would
+    // paint the loading state and hide stale rows either way, so the assertion
+    // below would pass even with the keying removed.
+    vi.mocked(holeService.getRequests).mockResolvedValue([]);
     await user.click(screen.getByRole("link", { name: "switch hole" }));
+    await screen.findByText(/no requests/i);
 
     expect(screen.queryByText("/aaaaaa")).not.toBeInTheDocument();
     expect(screen.getAllByText("bbbbbb").length).toBeGreaterThan(0);

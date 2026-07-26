@@ -191,3 +191,28 @@ Suite: 44 → 61 tests.
 **Bookkeeping:** `plans/tasks/0005-body-viewer.md` had the render-phase fetch fix and the download
 link as its own AFK items. Both are done; that file now records them as met in 0004 so they are
 not built twice.
+
+**Review round 4** — because round two's fixes had introduced two regressions, round three's fixes
+got a targeted regression hunt rather than an assumption of cleanliness. It mutation-tested each
+new guard and probed `getBody` against a real HTTP server. Three findings, all fixed:
+
+- **The create button offered in the failed-load panel was itself a dead control.** `createHole`
+  had no error path, so clicking it while the backend was still down produced an unhandled
+  rejection and no visible change at all. Round three created that reachability — before it, the
+  button only appeared in states where the backend had just answered. It now catches, logs, and
+  keeps the failed state.
+- **A successful create from the failed state left `loadState` pinned at `failed`,** so returning
+  Home reported "Couldn't load your holes" while the dropdown simultaneously listed the hole the
+  user had just made. `createHole` now sets `loaded` on success.
+- **The test guarding the keying fix could not fail.** It stubbed the second hole's fetch as a
+  never-settling promise, so the loading state hid stale rows whether or not the `key` was there;
+  removing `key={hole_address}` left all 61 tests green. With the second hole resolving `[]`
+  instead, the mutation now fails — verified by hand. Worse than a one-frame flash: because the
+  merge change combines with leftover state, a missing key would have kept the previous hole's rows
+  on screen permanently.
+
+The hunt also confirmed, by mutation, that every other round-three guard is load-bearing and
+caught by a real assertion, and that there is no fetch storm, no `getHoles` loop, and no
+delete-undone-by-merge.
+
+Suite: 61 → 63 tests. Rounds found 18 → 21 → 3 findings; the loop stops here.
