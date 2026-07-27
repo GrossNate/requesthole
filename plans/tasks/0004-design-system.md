@@ -54,9 +54,11 @@ would otherwise look like styling omissions.
 
 ## Human-in-the-loop tasks
 
-- [ ] [verify] Look at the restyled app and judge whether it reads as more compelling — "compelling"
+- [x] [verify] Look at the restyled app and judge whether it reads as more compelling — "compelling"
       is an aesthetic judgment no assertion can make. Check the logo/wordmark pairing, the palette
       against the logo, and legibility of the two tables.
+      **Verified 2026-07-27.** Found one defect during the check: the navbar "Holes" dropdown could
+      be opened but not used — see the round-5 note below.
 
 ## Acceptance criteria
 
@@ -215,4 +217,20 @@ The hunt also confirmed, by mutation, that every other round-three guard is load
 caught by a real assertion, and that there is no fetch storm, no `getHoles` loop, and no
 delete-undone-by-merge.
 
-Suite: 61 → 63 tests. Rounds found 18 → 21 → 3 findings; the loop stops here.
+Suite: 61 → 63 tests. Rounds found 18 → 21 → 3 findings; the automated loop stops here.
+
+**Round 5 — the human `[verify]` pass, after the PR was opened.** It found what four rounds of
+agent review had not, which is the argument for the `[verify]` step existing at all: the navbar
+"Holes" dropdown opened on hover but could not be used. Moving the pointer toward an entry closed
+the menu.
+
+Cause, measured in the browser rather than guessed: `mt-tight` put an **8px gap** between the
+trigger and the menu. `dropdown-content` is absolutely positioned, so it sits outside the
+trigger's box — the gap is ground where the pointer hovers neither element, and the menu closes
+before it can be reached. The breathing room now comes from the menu's own padding, which is
+inside the hover target. The menu was also a fixed `w-56` (measured 213px) for a six-character
+address; it is `w-max min-w-32` now (measured 122px).
+
+Verified end to end in the browser: dead zone 0px, hover the trigger → move down onto an entry →
+menu stays open with the entry highlighted → click navigates to that hole. No unit test guards
+this, and none can: jsdom has no layout, so element geometry and `:hover` do not exist there.

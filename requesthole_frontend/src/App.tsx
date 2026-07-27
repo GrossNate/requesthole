@@ -83,9 +83,15 @@ function App() {
                   {holes.length > 0 ? holes.length : ""}
                 </span>
               </div>
+              {/* No top margin: the menu is positioned outside the trigger's
+                  box, so a gap is ground the pointer crosses while hovering
+                  neither one, and the menu closes before it can be reached.
+                  The breathing room comes from the menu's own padding.
+                  Width follows the content — a six-character address needs
+                  nowhere near a fixed 14rem. */}
               <ul
                 tabIndex={0}
-                className="menu dropdown-content bg-base-200 border-base-300 rounded-box z-1 mt-tight w-56 border p-tight shadow-lg"
+                className="menu dropdown-content bg-base-200 border-base-300 rounded-box z-1 w-max min-w-32 border p-tight shadow-lg"
               >
                 {holes.length === 0 ? (
                   <li>
