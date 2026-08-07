@@ -8,8 +8,9 @@ describe("highlightCode", () => {
     const { container } = render(<pre>{highlightCode(code, "json")}</pre>);
 
     expect(container.textContent).toBe(code);
-    expect(container.querySelectorAll("span[class^='hljs-']").length)
-      .toBeGreaterThan(0);
+    expect(
+      container.querySelectorAll("span[class^='hljs-']").length,
+    ).toBeGreaterThan(0);
   });
 
   // The security invariant: body content must never become markup. Even

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import holeService from "../services";
 import EmptyState from "./EmptyState";
 import { classifyBody, parseMediaType } from "../utils/mediaType";
@@ -15,13 +15,47 @@ import { highlightCode, type HighlightLanguage } from "../utils/highlight";
 export const DISPLAY_CAP_BYTES = 256 * 1024;
 
 /**
+ * The byte cap alone doesn't bound the DOM — a 256 KB body of tiny form
+ * pairs or multipart parts is tens of thousands of rows. Row counts are
+ * capped separately.
+ */
+export const MAX_RENDERED_ROWS = 1000;
+
+/**
+ * Raster image subtypes safe to hand to an <img> via a blob URL. SVG is
+ * deliberately absent: an SVG document can run script, and a blob: URL
+ * inherits this origin — see useOwnedBlobUrl.
+ */
+const RASTER_IMAGE_SUBTYPES = new Set([
+  "png",
+  "jpeg",
+  "jpg",
+  "gif",
+  "webp",
+  "bmp",
+  "avif",
+  "x-icon",
+  "vnd.microsoft.icon",
+]);
+
+/**
  * An object URL for bytes the app already holds, revoked on cleanup. Built
  * synchronously from fetched state, so there is no async race to guard.
+ *
+ * Always typed application/octet-stream, never a captured content-type: a
+ * blob: URL inherits this origin, so an attacker-typed image/svg+xml blob
+ * would render as a script-capable same-origin document if the user opened
+ * it in a tab. Raster <img> rendering survives via content sniffing;
+ * downloads don't care.
  */
-function useOwnedBlobUrl(bytes: Uint8Array): string | undefined {
+function useOwnedBlobUrl(
+  bytes: Uint8Array,
+  enabled = true,
+): string | undefined {
   const [url, setUrl] = useState<string>();
 
   useEffect(() => {
+    if (!enabled) return;
     const objectUrl = URL.createObjectURL(
       new Blob([bytes as unknown as BlobPart], {
         type: "application/octet-stream",
@@ -32,7 +66,7 @@ function useOwnedBlobUrl(bytes: Uint8Array): string | undefined {
       URL.revokeObjectURL(objectUrl);
       setUrl(undefined);
     };
-  }, [bytes]);
+  }, [bytes, enabled]);
 
   return url;
 }
@@ -68,16 +102,23 @@ const CodeBlock = ({
 }: {
   text: string;
   language?: HighlightLanguage;
-}) => (
-  <pre className="address border-base-300 bg-base-200/50 px-gutter py-snug rounded-box border break-all whitespace-pre-wrap">
-    {language ? highlightCode(text, language) : text}
-  </pre>
-);
+}) => {
+  // Tokenizing up to 256 KB is too expensive to re-run per render.
+  const children = useMemo(
+    () => (language ? highlightCode(text, language) : text),
+    [text, language],
+  );
+  return (
+    <pre className="address border-base-300 bg-base-200/50 px-gutter py-snug rounded-box border break-all whitespace-pre-wrap">
+      {children}
+    </pre>
+  );
+};
 
 /**
  * Decodes body bytes per the content-type's charset parameter, defaulting to
- * UTF-8. The charset is attacker-controlled, so an unknown label falls back to
- * UTF-8 rather than throwing.
+ * UTF-8. The charset is attacker-controlled, so an unknown label falls back
+ * to UTF-8 rather than throwing.
  */
 function decodeBytes(bytes: Uint8Array, charset: string | undefined): string {
   let decoder: TextDecoder;
@@ -104,19 +145,26 @@ const RequestBody = ({
 }) => {
   const media = parseMediaType(contentType);
   const family = classifyBody(media);
+  const charset = media?.parameters["charset"];
 
   const [bytes, setBytes] = useState<Uint8Array>();
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     if (family === "image") return;
     let current = true;
+    setBytes(undefined);
+    setFailed(false);
 
     holeService
       .getBodyBytes(requestAddress)
       .then((buffer) => {
         if (current) setBytes(new Uint8Array(buffer));
       })
-      .catch((error) => console.error(error));
+      .catch((error) => {
+        console.error(error);
+        if (current) setFailed(true);
+      });
 
     return () => {
       current = false;
@@ -130,6 +178,18 @@ const RequestBody = ({
           alt="Captured request body"
           className="border-base-300 rounded-box max-w-full border"
           src={`${holeService.BASE_URL}/api/request/${requestAddress}/body`}
+        />
+      </BodySection>
+    );
+  }
+
+  if (failed) {
+    return (
+      <BodySection>
+        <EmptyState
+          compact
+          title="Couldn't load this body"
+          description="The backend didn't answer. Check that it's running, then reload."
         />
       </BodySection>
     );
@@ -149,18 +209,48 @@ const RequestBody = ({
     );
   }
 
-  if (bytes.byteLength > DISPLAY_CAP_BYTES) {
-    return <TruncatedBody bytes={bytes} requestAddress={requestAddress} />;
+  // Binary bodies keep their hex-preview rendering whatever their size, and
+  // multipart bodies cap per part — only text-rendered families go through
+  // the whole-body truncation path.
+  if (family === "binary") {
+    return (
+      <BinaryBody
+        bytes={bytes}
+        requestAddress={requestAddress}
+        subtype={media?.subtype}
+      />
+    );
   }
 
-  const text = decodeBytes(bytes, media?.parameters["charset"]);
+  if (family === "multipart") {
+    return (
+      <MultipartBody
+        bytes={bytes}
+        boundary={media?.parameters["boundary"] ?? ""}
+        charset={charset}
+        requestAddress={requestAddress}
+      />
+    );
+  }
+
+  if (bytes.byteLength > DISPLAY_CAP_BYTES) {
+    return (
+      <TruncatedBody
+        bytes={bytes}
+        charset={charset}
+        requestAddress={requestAddress}
+      />
+    );
+  }
+
+  const text = decodeBytes(bytes, charset);
 
   switch (family) {
     case "json":
       return (
         <StructuredTextBody
           text={text}
-          formatted={prettyJson(text)}
+          format={prettyJson}
           claimed="JSON"
           language="json"
         />
@@ -169,7 +259,7 @@ const RequestBody = ({
       return (
         <StructuredTextBody
           text={text}
-          formatted={prettyNdjson(text)}
+          format={prettyNdjson}
           claimed="NDJSON"
           language="json"
         />
@@ -178,13 +268,15 @@ const RequestBody = ({
       return (
         <StructuredTextBody
           text={text}
-          formatted={prettyXml(text)}
+          format={prettyXml}
           claimed="XML"
           language="xml"
         />
       );
     case "yaml":
-      // YAML is already line-oriented; it gets highlighting, not reformatting.
+      // YAML is already line-oriented; it gets highlighting, not
+      // reformatting. There is no malformed fallback because there is no
+      // meaningful malformed case: almost any text is a valid YAML scalar.
       return (
         <BodySection>
           <CodeBlock text={text} language="yaml" />
@@ -204,31 +296,273 @@ const RequestBody = ({
           <CodeBlock text={text} language="xml" />
         </BodySection>
       );
-    case "text":
+    case "form":
+      return (
+        <FormEncodedBody
+          text={text}
+          bytes={bytes}
+          requestAddress={requestAddress}
+        />
+      );
+    default:
       return (
         <BodySection>
           <CodeBlock text={text} />
         </BodySection>
       );
-    case "form":
-      return <FormEncodedBody text={text} />;
-    case "multipart":
-      return (
-        <MultipartBody
-          bytes={bytes}
-          boundary={media?.parameters["boundary"] ?? ""}
-          text={text}
-        />
-      );
-    default:
-      return (
-        <BinaryBody
-          bytes={bytes}
-          requestAddress={requestAddress}
-          subtype={media?.subtype}
-        />
-      );
   }
+};
+
+/**
+ * A structured-text body: formatted and highlighted when it parses, raw text
+ * with an explicit note when it does not — malformed content must never
+ * throw, and must never be silently hidden.
+ */
+const StructuredTextBody = ({
+  text,
+  format,
+  claimed,
+  language,
+}: {
+  text: string;
+  format: (text: string) => string | undefined;
+  claimed: string;
+  language: HighlightLanguage;
+}) => {
+  // Formatting up to 256 KB (JSON.parse, DOMParser) per render is the
+  // freeze the display cap exists to avoid.
+  const formatted = useMemo(() => format(text), [format, text]);
+
+  return (
+    <BodySection>
+      {formatted === undefined ? (
+        <>
+          <p className="text-caption text-warning">
+            This body didn't parse as {claimed}; showing it as raw text.
+          </p>
+          <CodeBlock text={text} />
+        </>
+      ) : (
+        <CodeBlock text={formatted} language={language} />
+      )}
+    </BodySection>
+  );
+};
+
+/**
+ * An `application/x-www-form-urlencoded` body as a key/value table. A value
+ * that is itself a JSON object or array is pretty-printed — GitHub and Slack
+ * send the whole webhook as a single `payload` parameter, which is otherwise
+ * an unreadable escaped blob.
+ */
+const FormEncodedBody = ({
+  text,
+  bytes,
+  requestAddress,
+}: {
+  text: string;
+  bytes: Uint8Array;
+  requestAddress: string;
+}) => {
+  const pairs = useMemo(() => Array.from(new URLSearchParams(text)), [text]);
+  const omitted = Math.max(0, pairs.length - MAX_RENDERED_ROWS);
+  const downloadUrl = useOwnedBlobUrl(bytes, omitted > 0);
+
+  return (
+    <BodySection>
+      {omitted > 0 ? (
+        <p className="text-caption text-warning">
+          {pairs.length.toLocaleString()} pairs — showing the first{" "}
+          {MAX_RENDERED_ROWS.toLocaleString()}, {omitted.toLocaleString()} more
+          pairs not shown. Download the body to see all of them.
+        </p>
+      ) : null}
+      <div className="border-base-300 rounded-box overflow-hidden border">
+        <table className="table-zebra table w-full">
+          <tbody>
+            {pairs.slice(0, MAX_RENDERED_ROWS).map(([key, value], index) => {
+              const nestedJson = /^\s*[{[]/.test(value)
+                ? prettyJson(value)
+                : undefined;
+              return (
+                <tr key={index} className="border-base-300">
+                  <th
+                    scope="row"
+                    className="address text-base-content/60 w-64 align-top font-normal"
+                  >
+                    {key}
+                  </th>
+                  <td className="text-base-content break-all whitespace-normal">
+                    {nestedJson === undefined ? (
+                      <span className="address whitespace-normal">{value}</span>
+                    ) : (
+                      <pre className="address whitespace-pre-wrap">
+                        {highlightCode(nestedJson, "json")}
+                      </pre>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {omitted > 0 ? (
+        <DownloadLink url={downloadUrl} filename={`${requestAddress}.bin`} />
+      ) : null}
+    </BodySection>
+  );
+};
+
+/**
+ * A `multipart/form-data` body as a list of parts. Text parts render as text;
+ * a raster image part renders inline from a blob built out of the bytes
+ * already in hand — never another fetch, never a link to the body endpoint.
+ */
+const MultipartBody = ({
+  bytes,
+  boundary,
+  charset,
+  requestAddress,
+}: {
+  bytes: Uint8Array;
+  boundary: string;
+  charset: string | undefined;
+  requestAddress: string;
+}) => {
+  // Byte-scanning the whole body per render would repeat on every parent
+  // state change; parts must also be referentially stable so each image
+  // part's blob URL isn't revoked and rebuilt per render.
+  const parsed = useMemo(
+    () => parseMultipart(bytes, boundary),
+    [bytes, boundary],
+  );
+  const overCap = bytes.byteLength > DISPLAY_CAP_BYTES;
+  const omitted = parsed
+    ? Math.max(0, parsed.parts.length - MAX_RENDERED_ROWS)
+    : 0;
+  const downloadUrl = useOwnedBlobUrl(
+    bytes,
+    parsed === undefined ? overCap : omitted > 0,
+  );
+
+  if (parsed === undefined) {
+    return (
+      <BodySection>
+        <p className="text-caption text-warning">
+          This body didn't parse as multipart/form-data; showing it as raw text
+          {overCap ? ", truncated" : ""}.
+        </p>
+        <CodeBlock
+          text={decodeBytes(bytes.subarray(0, DISPLAY_CAP_BYTES), charset)}
+        />
+        {overCap ? (
+          <DownloadLink url={downloadUrl} filename={`${requestAddress}.bin`} />
+        ) : null}
+      </BodySection>
+    );
+  }
+
+  const { parts, skipped } = parsed;
+
+  return (
+    <BodySection>
+      {skipped > 0 ? (
+        <p className="text-caption text-warning">
+          {skipped.toLocaleString()} {skipped === 1 ? "part" : "parts"} couldn't
+          be parsed and {skipped === 1 ? "is" : "are"} not shown.
+        </p>
+      ) : null}
+      {omitted > 0 ? (
+        <p className="text-caption text-warning">
+          {parts.length.toLocaleString()} parts — showing the first{" "}
+          {MAX_RENDERED_ROWS.toLocaleString()}, {omitted.toLocaleString()} more
+          parts not shown. Download the body to see all of them.
+        </p>
+      ) : null}
+      <ul className="gap-tight flex list-none flex-col">
+        {parts.slice(0, MAX_RENDERED_ROWS).map((part, index) => (
+          <li
+            key={index}
+            className="border-base-300 rounded-box flex flex-col overflow-hidden border"
+          >
+            <div className="gap-snug bg-base-200/50 border-base-300 px-gutter py-tight flex flex-wrap items-baseline border-b">
+              <span className="address text-base-content">
+                {part.name ?? "(unnamed part)"}
+              </span>
+              {part.filename ? (
+                <span className="address text-base-content/60">
+                  {part.filename}
+                </span>
+              ) : null}
+              {part.contentType ? (
+                <span className="text-caption text-base-content/50">
+                  {part.contentType}
+                </span>
+              ) : null}
+            </div>
+            <div className="px-gutter py-snug">
+              <MultipartPartContent part={part} />
+            </div>
+          </li>
+        ))}
+      </ul>
+      {omitted > 0 ? (
+        <DownloadLink url={downloadUrl} filename={`${requestAddress}.bin`} />
+      ) : null}
+    </BodySection>
+  );
+};
+
+const MultipartPartContent = ({ part }: { part: MultipartPart }) => {
+  const partMedia = parseMediaType(part.contentType);
+  const family = classifyBody(partMedia);
+  const isRaster =
+    family === "image" && RASTER_IMAGE_SUBTYPES.has(partMedia!.subtype);
+  const imageUrl = useOwnedBlobUrl(part.bytes, isRaster);
+
+  if (isRaster) {
+    return imageUrl ? (
+      <img
+        alt={`Captured part ${part.name ?? ""}`}
+        className="border-base-300 rounded-box max-w-full border"
+        src={imageUrl}
+      />
+    ) : null;
+  }
+
+  // A part with no content-type is text by multipart convention; declared
+  // text-ish families render as text too. Anything else — including
+  // non-raster images like SVG, which could execute as a document — stays a
+  // byte count. The whole body skips the byte cap so parts can render, which
+  // makes the per-part cap here the only bound on an oversized text part.
+  const isTextual =
+    family !== "binary" && family !== "image" && family !== "multipart";
+  if (part.contentType === undefined || isTextual) {
+    const overCap = part.bytes.byteLength > DISPLAY_CAP_BYTES;
+    return (
+      <>
+        {overCap ? (
+          <p className="text-caption text-warning">
+            Truncated: showing the first {DISPLAY_CAP_BYTES.toLocaleString()} of{" "}
+            {part.bytes.byteLength.toLocaleString()} bytes.
+          </p>
+        ) : null}
+        <span className="address text-base-content whitespace-pre-wrap">
+          {decodeBytes(
+            part.bytes.subarray(0, DISPLAY_CAP_BYTES),
+            partMedia?.parameters["charset"],
+          )}
+        </span>
+      </>
+    );
+  }
+
+  return (
+    <span className="text-caption text-base-content/60">
+      {part.bytes.byteLength.toLocaleString()} bytes
+    </span>
+  );
 };
 
 /** Extensions for download filenames; anything unrecognized gets `.bin`. */
@@ -268,14 +602,16 @@ const BinaryBody = ({
 };
 
 /**
- * A body over the display cap: a decoded prefix with an explicit truncation
- * marker, plus the whole body as a download.
+ * A text body over the display cap: a decoded prefix with an explicit
+ * truncation marker, plus the whole body as a download.
  */
 const TruncatedBody = ({
   bytes,
+  charset,
   requestAddress,
 }: {
   bytes: Uint8Array;
+  charset: string | undefined;
   requestAddress: string;
 }) => {
   const downloadUrl = useOwnedBlobUrl(bytes);
@@ -288,196 +624,11 @@ const TruncatedBody = ({
         of it.
       </p>
       <CodeBlock
-        text={decodeBytes(bytes.subarray(0, DISPLAY_CAP_BYTES), undefined)}
+        text={decodeBytes(bytes.subarray(0, DISPLAY_CAP_BYTES), charset)}
       />
       <DownloadLink url={downloadUrl} filename={`${requestAddress}.bin`} />
     </BodySection>
   );
 };
-
-/**
- * A `multipart/form-data` body as a list of parts. Text parts render as text;
- * an image part renders inline from a blob built out of the bytes already in
- * hand — never another fetch, never a link to the body endpoint.
- */
-const MultipartBody = ({
-  bytes,
-  boundary,
-  text,
-}: {
-  bytes: Uint8Array;
-  boundary: string;
-  text: string;
-}) => {
-  const parts = parseMultipart(bytes, boundary);
-
-  if (parts === undefined) {
-    return (
-      <BodySection>
-        <p className="text-caption text-warning">
-          This body didn't parse as multipart/form-data; showing it as raw
-          text.
-        </p>
-        <CodeBlock text={text} />
-      </BodySection>
-    );
-  }
-
-  return (
-    <BodySection>
-      <ul className="gap-tight flex list-none flex-col">
-        {parts.map((part, index) => (
-          <li
-            key={index}
-            className="border-base-300 rounded-box flex flex-col overflow-hidden border"
-          >
-            <div className="gap-snug bg-base-200/50 border-base-300 px-gutter py-tight flex flex-wrap items-baseline border-b">
-              <span className="address text-base-content">
-                {part.name ?? "(unnamed part)"}
-              </span>
-              {part.filename ? (
-                <span className="address text-base-content/60">
-                  {part.filename}
-                </span>
-              ) : null}
-              {part.contentType ? (
-                <span className="text-caption text-base-content/50">
-                  {part.contentType}
-                </span>
-              ) : null}
-            </div>
-            <div className="px-gutter py-snug">
-              <MultipartPartContent part={part} />
-            </div>
-          </li>
-        ))}
-      </ul>
-    </BodySection>
-  );
-};
-
-const MultipartPartContent = ({ part }: { part: MultipartPart }) => {
-  const family = classifyBody(parseMediaType(part.contentType));
-  const [imageUrl, setImageUrl] = useState<string>();
-  const isImage = family === "image";
-
-  // The blob is built synchronously from bytes already fetched, so unlike the
-  // body-level download there is no async race — cleanup only has to revoke.
-  useEffect(() => {
-    if (!isImage) return;
-    const url = URL.createObjectURL(
-      new Blob([part.bytes as BlobPart], { type: part.contentType }),
-    );
-    setImageUrl(url);
-    return () => {
-      URL.revokeObjectURL(url);
-      setImageUrl(undefined);
-    };
-  }, [part, isImage]);
-
-  if (isImage) {
-    return imageUrl ? (
-      <img
-        alt={`Captured part ${part.name ?? ""}`}
-        className="border-base-300 rounded-box max-w-full border"
-        src={imageUrl}
-      />
-    ) : null;
-  }
-
-  // A part with no content-type is text by multipart convention; declared
-  // text-ish families render as text too. Anything else stays a byte count.
-  if (part.contentType === undefined || family !== "binary") {
-    return (
-      <span className="address text-base-content whitespace-pre-wrap">
-        {decodeBytes(
-          part.bytes,
-          parseMediaType(part.contentType)?.parameters["charset"],
-        )}
-      </span>
-    );
-  }
-
-  return (
-    <span className="text-caption text-base-content/60">
-      {part.bytes.byteLength.toLocaleString()} bytes
-    </span>
-  );
-};
-
-/**
- * An `application/x-www-form-urlencoded` body as a key/value table. A value
- * that is itself a JSON object or array is pretty-printed — GitHub and Slack
- * send the whole webhook as a single `payload` parameter, which is otherwise
- * an unreadable escaped blob.
- */
-const FormEncodedBody = ({ text }: { text: string }) => {
-  const pairs = Array.from(new URLSearchParams(text));
-
-  return (
-    <BodySection>
-      <div className="border-base-300 rounded-box overflow-hidden border">
-        <table className="table-zebra table w-full">
-          <tbody>
-            {pairs.map(([key, value], index) => {
-              const nestedJson = /^\s*[{[]/.test(value)
-                ? prettyJson(value)
-                : undefined;
-              return (
-                <tr key={index} className="border-base-300">
-                  <th
-                    scope="row"
-                    className="address text-base-content/60 w-64 align-top font-normal"
-                  >
-                    {key}
-                  </th>
-                  <td className="text-base-content break-all whitespace-normal">
-                    {nestedJson === undefined ? (
-                      <span className="address whitespace-normal">{value}</span>
-                    ) : (
-                      <pre className="address whitespace-pre-wrap">
-                        {highlightCode(nestedJson, "json")}
-                      </pre>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </BodySection>
-  );
-};
-
-/**
- * A structured-text body: formatted and highlighted when it parses, raw text
- * with an explicit note when it does not — malformed content must never
- * throw, and must never be silently hidden.
- */
-const StructuredTextBody = ({
-  text,
-  formatted,
-  claimed,
-  language,
-}: {
-  text: string;
-  formatted: string | undefined;
-  claimed: string;
-  language: HighlightLanguage;
-}) => (
-  <BodySection>
-    {formatted === undefined ? (
-      <>
-        <p className="text-caption text-warning">
-          This body didn't parse as {claimed}; showing it as raw text.
-        </p>
-        <CodeBlock text={text} />
-      </>
-    ) : (
-      <CodeBlock text={formatted} language={language} />
-    )}
-  </BodySection>
-);
 
 export default RequestBody;

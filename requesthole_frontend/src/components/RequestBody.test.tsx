@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import holeService from "../services";
-import RequestBody, { DISPLAY_CAP_BYTES } from "./RequestBody";
+import RequestBody, {
+  DISPLAY_CAP_BYTES,
+  MAX_RENDERED_ROWS,
+} from "./RequestBody";
 
 vi.mock("../services", () => ({
   default: {
@@ -81,6 +84,15 @@ describe("JSON bodies", () => {
     await screen.findByText(/didn't parse as JSON/i);
     expect(container.textContent).toContain('{"unclosed":');
   });
+
+  // A network error used to render nothing at all — the blank panel this
+  // viewer exists to eliminate, with no way to tell it from an empty body.
+  it("reports a failed body load instead of rendering nothing", async () => {
+    vi.mocked(holeService.getBodyBytes).mockRejectedValue(new Error("offline"));
+    renderBody("application/json");
+
+    expect(await screen.findByText(/couldn't load this body/i)).toBeVisible();
+  });
 });
 
 describe("other structured text bodies", () => {
@@ -132,9 +144,7 @@ describe("other structured text bodies", () => {
     );
     const { container } = renderBody("text/html");
 
-    await waitFor(() =>
-      expect(container.textContent).toContain("<p>hi</p>"),
-    );
+    await waitFor(() => expect(container.textContent).toContain("<p>hi</p>"));
     expect(container.querySelector("img")).toBeNull();
     expect(container.querySelector("p")).toBeNull();
   });
@@ -157,7 +167,9 @@ describe("form-encoded bodies", () => {
     );
     renderBody("application/x-www-form-urlencoded");
 
-    expect(await screen.findByRole("rowheader", { name: "flavor" })).toBeVisible();
+    expect(
+      await screen.findByRole("rowheader", { name: "flavor" }),
+    ).toBeVisible();
     expect(screen.getByText("vanilla")).toBeVisible();
     expect(screen.getByRole("rowheader", { name: "topping" })).toBeVisible();
     expect(screen.getByText("hot fudge!")).toBeVisible();
@@ -175,6 +187,28 @@ describe("form-encoded bodies", () => {
     await screen.findByRole("rowheader", { name: "payload" });
     expect(container.textContent).toContain('"action": "opened"');
     expect(container.textContent).toContain('"number": 7');
+  });
+
+  // The byte cap alone doesn't bound the DOM: a 256 KB body of tiny pairs is
+  // tens of thousands of table rows.
+  it("caps the number of rendered rows and offers the full body instead", async () => {
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn(() => "blob:whole"),
+      revokeObjectURL: vi.fn(),
+    });
+    const pairs = Array.from(
+      { length: MAX_RENDERED_ROWS + 500 },
+      (_, i) => `k${i}=v${i}`,
+    ).join("&");
+    vi.mocked(holeService.getBodyBytes).mockResolvedValue(toBytes(pairs));
+    const { container } = renderBody("application/x-www-form-urlencoded");
+
+    await screen.findByText(/500 more pairs not shown/i);
+    expect(container.querySelectorAll("tbody tr")).toHaveLength(
+      MAX_RENDERED_ROWS,
+    );
+    const download = await screen.findByRole("link", { name: /download/i });
+    expect(download.getAttribute("href")).toBe("blob:whole");
   });
 });
 
@@ -212,9 +246,17 @@ describe("multipart bodies", () => {
   });
 
   // The image bytes are already in hand; the part renders from an app-owned
-  // blob, never by another fetch or a link to the body endpoint.
-  it("renders an image part inline from a blob the app owns", async () => {
-    const createObjectURL = vi.fn(() => "blob:part");
+  // blob, never by another fetch or a link to the body endpoint. The blob is
+  // typed application/octet-stream, never the attacker's declared type — a
+  // blob: URL inherits this origin, so an attacker-typed image/svg+xml blob
+  // would be a script-capable document one "open in new tab" away. Raster
+  // formats render in <img> via content sniffing regardless of blob type.
+  it("renders a raster image part inline from an octet-stream blob the app owns", async () => {
+    let createdBlob: Blob | undefined;
+    const createObjectURL = vi.fn((blob: Blob) => {
+      createdBlob = blob;
+      return "blob:part";
+    });
     vi.stubGlobal("URL", { createObjectURL, revokeObjectURL: vi.fn() });
     vi.mocked(holeService.getBodyBytes).mockResolvedValue(multipartFixture());
     const { container } = renderBody("multipart/form-data; boundary=B");
@@ -225,6 +267,95 @@ describe("multipart bodies", () => {
       expect(image).not.toBeNull();
       expect(image!.getAttribute("src")).toBe("blob:part");
     });
+    expect(createdBlob?.type).toBe("application/octet-stream");
+  });
+
+  // SVG needs its MIME type to render, and an SVG document can run script —
+  // so an image/svg+xml part must never become a typed blob or an <img>; it
+  // falls through to the byte-count rendering instead.
+  it("treats an SVG image part as binary, creating no blob at all", async () => {
+    const createObjectURL = vi.fn(() => "blob:part");
+    vi.stubGlobal("URL", { createObjectURL, revokeObjectURL: vi.fn() });
+    vi.mocked(holeService.getBodyBytes).mockResolvedValue(
+      toBytes(
+        [
+          "--B",
+          'content-disposition: form-data; name="pic"; filename="evil.svg"',
+          "content-type: image/svg+xml",
+          "",
+          '<svg onload="alert(1)"></svg>',
+          "--B--",
+          "",
+        ].join("\r\n"),
+      ),
+    );
+    const { container } = renderBody("multipart/form-data; boundary=B");
+
+    await screen.findByText("evil.svg");
+    expect(await screen.findByText(/29 bytes/)).toBeVisible();
+    expect(container.querySelector("img")).toBeNull();
+    expect(createObjectURL).not.toHaveBeenCalled();
+  });
+
+  // An inspector must never silently omit content.
+  it("says when a region between boundaries could not be parsed", async () => {
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn(() => "blob:part"),
+      revokeObjectURL: vi.fn(),
+    });
+    vi.mocked(holeService.getBodyBytes).mockResolvedValue(
+      toBytes(
+        [
+          "--B",
+          "header-with-no-blank-line",
+          "--B",
+          'content-disposition: form-data; name="ok"',
+          "",
+          "good part",
+          "--B--",
+          "",
+        ].join("\r\n"),
+      ),
+    );
+    renderBody("multipart/form-data; boundary=B");
+
+    expect(await screen.findByText(/1 part couldn't be parsed/i)).toBeVisible();
+  });
+
+  // The byte cap alone doesn't bound the DOM: thousands of tiny parts under
+  // 256 KB would still render thousands of cards.
+  it("caps the number of rendered parts and says how many were omitted", async () => {
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn(() => "blob:whole"),
+      revokeObjectURL: vi.fn(),
+    });
+    const parts = Array.from(
+      { length: MAX_RENDERED_ROWS + 50 },
+      (_, i) =>
+        `--B\r\ncontent-disposition: form-data; name="p${i}"\r\n\r\nv\r\n`,
+    ).join("");
+    vi.mocked(holeService.getBodyBytes).mockResolvedValue(
+      toBytes(`${parts}--B--\r\n`),
+    );
+    const { container } = renderBody("multipart/form-data; boundary=B");
+
+    await screen.findByText(/50 more parts not shown/i);
+    expect(container.querySelectorAll("li")).toHaveLength(MAX_RENDERED_ROWS);
+  });
+
+  // Multipart bodies skip the body-level byte cap (an upload with one big
+  // file part should still list its parts), so each text part is capped on
+  // its own.
+  it("truncates an oversized text part rather than dumping it whole", async () => {
+    const huge = "z".repeat(DISPLAY_CAP_BYTES + 100);
+    vi.mocked(holeService.getBodyBytes).mockResolvedValue(
+      toBytes(
+        `--B\r\ncontent-disposition: form-data; name="big"\r\n\r\n${huge}\r\n--B--\r\n`,
+      ),
+    );
+    renderBody("multipart/form-data; boundary=B");
+
+    expect(await screen.findByText(/truncated/i)).toBeVisible();
   });
 
   // A multipart claim whose body lacks the boundary is malformed structured
@@ -365,6 +496,43 @@ describe("the display cap", () => {
 
     const download = await screen.findByRole("link", { name: /download/i });
     expect(download.getAttribute("href")).toBe("blob:whole");
+  });
+
+  // Force-decoding a large binary body as text would dump 256 KB of control
+  // characters into a <pre>; binary bodies keep their hex-preview rendering
+  // whatever their size.
+  it("shows an oversized binary body as hex preview and download, not truncated text", async () => {
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn(() => "blob:whole"),
+      revokeObjectURL: vi.fn(),
+    });
+    const big = new Uint8Array(DISPLAY_CAP_BYTES + 10).fill(0x47);
+    vi.mocked(holeService.getBodyBytes).mockResolvedValue(
+      big.buffer as ArrayBuffer,
+    );
+    const { container } = renderBody("application/octet-stream");
+
+    await screen.findByText(
+      new RegExp(`${(DISPLAY_CAP_BYTES + 10).toLocaleString()} bytes`),
+    );
+    expect(container.textContent).toContain("|GGGGGGGGGGGGGGGG|");
+    expect(screen.queryByText(/truncated/i)).not.toBeInTheDocument();
+  });
+
+  it("decodes the truncated prefix per the charset parameter", async () => {
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn(() => "blob:whole"),
+      revokeObjectURL: vi.fn(),
+    });
+    // 0xe9 is "é" in latin-1; decoded as UTF-8 it is a replacement character.
+    const big = new Uint8Array(DISPLAY_CAP_BYTES + 1).fill(0xe9);
+    vi.mocked(holeService.getBodyBytes).mockResolvedValue(
+      big.buffer as ArrayBuffer,
+    );
+    const { container } = renderBody("text/plain; charset=iso-8859-1");
+
+    await screen.findByText(/truncated/i);
+    expect(container.querySelector("pre")!.textContent).toContain("ééé");
   });
 
   it("renders a body exactly at the cap in full, untruncated", async () => {

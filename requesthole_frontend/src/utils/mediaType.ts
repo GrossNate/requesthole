@@ -1,7 +1,8 @@
 /**
  * A parsed `content-type` value. Dispatching on these fields is what lets the
  * body viewer treat `application/vnd.api+json; charset=utf-8` as JSON — the
- * substring matching this replaces sent vendor subtypes to a blank panel.
+ * substring matching this parser replaces used to send vendor subtypes to a
+ * blank panel.
  */
 export interface MediaType {
   type: string;
@@ -28,7 +29,10 @@ export function parseMediaType(
   if (slash === -1) return undefined;
 
   const type = essence.slice(0, slash).trim().toLowerCase();
-  const subtype = essence.slice(slash + 1).trim().toLowerCase();
+  const subtype = essence
+    .slice(slash + 1)
+    .trim()
+    .toLowerCase();
   if (type === "" || subtype === "") return undefined;
 
   const plus = subtype.lastIndexOf("+");
@@ -43,20 +47,49 @@ export function parseMediaType(
 /**
  * The `name=value` parameters of a header whose value is a token followed by
  * `;`-separated parameters — content-type, content-disposition. Names are
- * lowercased; quotes around values are delimiters, not content, and are
- * stripped.
+ * lowercased. Quotes around values are delimiters, not content: they are
+ * stripped, a quoted value may contain `;` and `\"`-escaped quotes (RFC
+ * 2046), and only unquoted values are whitespace-trimmed.
  */
 export function parseParameters(header: string): Record<string, string> {
   const parameters: Record<string, string> = {};
-  for (const segment of header.split(";").slice(1)) {
-    const equals = segment.indexOf("=");
-    if (equals === -1) continue;
-    const name = segment.slice(0, equals).trim().toLowerCase();
-    let value = segment.slice(equals + 1).trim();
-    if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
-      value = value.slice(1, -1);
+  let at = header.indexOf(";");
+  if (at === -1) return parameters;
+  at += 1;
+
+  while (at < header.length) {
+    const equals = header.indexOf("=", at);
+    if (equals === -1) break;
+    const semicolon = header.indexOf(";", at);
+    // A valueless token (`; flag; a=1`) — skip it, don't let its `;` be
+    // swallowed into the next parameter's name.
+    if (semicolon !== -1 && semicolon < equals) {
+      at = semicolon + 1;
+      continue;
     }
+    const name = header.slice(at, equals).trim().toLowerCase();
+
+    let value: string;
+    let i = equals + 1;
+    while (i < header.length && header[i] === " ") i += 1;
+    if (header[i] === '"') {
+      value = "";
+      i += 1;
+      while (i < header.length && header[i] !== '"') {
+        if (header[i] === "\\" && i + 1 < header.length) i += 1;
+        value += header[i];
+        i += 1;
+      }
+      i += 1;
+      while (i < header.length && header[i] !== ";") i += 1;
+    } else {
+      const end = header.indexOf(";", i);
+      value = header.slice(i, end === -1 ? header.length : end).trim();
+      i = end === -1 ? header.length : end;
+    }
+
     if (name !== "") parameters[name] = value;
+    at = i + 1;
   }
   return parameters;
 }

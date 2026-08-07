@@ -24,13 +24,25 @@ describe("parseMediaType", () => {
 
   // `application/json; charset=utf-8` is the common real-world form; the
   // charset drives text decoding and must not break subtype matching.
-  it("parses parameters, lowercasing names and values trimmed of whitespace", () => {
-    expect(parseMediaType("application/json; Charset=UTF-8")).toEqual({
+  it("parses parameters, lowercasing names, trimming values, keeping value case", () => {
+    expect(parseMediaType("application/json; Charset= UTF-8 ")).toEqual({
       type: "application",
       subtype: "json",
       suffix: undefined,
       parameters: { charset: "UTF-8" },
     });
+  });
+
+  // RFC 2046 allows `;` and `\"`-escaped quotes inside a quoted value; a bare
+  // split on `;` corrupts the boundary and every part-split misses.
+  it("keeps semicolons and escaped quotes inside a quoted value intact", () => {
+    expect(
+      parseMediaType('multipart/form-data; boundary="a;b"')?.parameters,
+    ).toEqual({ boundary: "a;b" });
+    expect(
+      parseMediaType('multipart/form-data; note="say \\"hi\\""; x=1')
+        ?.parameters,
+    ).toEqual({ note: 'say "hi"', x: "1" });
   });
 
   // Multipart boundaries are often quoted; the quotes are delimiters, not part

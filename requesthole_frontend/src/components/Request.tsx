@@ -142,7 +142,14 @@ const Request = () => {
   }
 
   const detail = () => {
-    if (loadState === "loading") {
+    // The stale-record check matters on route changes: the first render after
+    // the param changes still holds the previous request's record, and
+    // rendering the body viewer then would fetch the new address's body
+    // classified under the old content-type.
+    if (
+      loadState === "loading" ||
+      (request && request.request_address !== request_address)
+    ) {
       return (
         <p className="text-body text-base-content/50" role="status">
           Loading request…

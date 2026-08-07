@@ -146,7 +146,11 @@
   .hljs-name,
   .hljs-keyword,
   .hljs-selector-tag {
-    color: color-mix(in oklab, var(--color-primary) 80%, var(--color-base-content));
+    color: color-mix(
+      in oklab,
+      var(--color-primary) 80%,
+      var(--color-base-content)
+    );
   }
 
   /* String values: the secondary magenta. */

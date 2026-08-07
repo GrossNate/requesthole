@@ -61,35 +61,35 @@ Research on real-world webhook traffic (see Source) found `application/json` dom
 
 ## AFK tasks
 
-- [ ] Write a media-type parser (type, subtype, structured suffix, parameters) with tests, and
+- [x] Write a media-type parser (type, subtype, structured suffix, parameters) with tests, and
       dispatch on its output. No substring matching on the raw header.
 - [x] ~~Move body fetching into a proper effect keyed on the request address, eliminating the
       render-phase fetch loop. Test that one mount issues one fetch.~~ **Done in task 0004** — the
       render-phase fetch was an unbounded request loop for JSON bodies, live on `main`, so it was
       fixed while the component was being restyled. `Request.tsx` fetches in a `useEffect` keyed on
       the request address, and `Request.test.tsx` asserts one mount issues one fetch.
-- [ ] Fetch the body as bytes and decode per the charset parameter, defaulting to UTF-8. **Note:**
+- [x] Fetch the body as bytes and decode per the charset parameter, defaulting to UTF-8. **Note:**
       0004 added `holeService.getBodyBytes()` (`responseType: "arraybuffer"`) for the PDF download —
       reuse it rather than adding another. `getBody()` was also pinned to `responseType: "text"`
       with an identity transform in 0004, so axios no longer silently JSON-parses captured bodies.
-- [ ] Implement the structured-text renderer: JSON, XML, YAML, NDJSON, pretty-printed, with tests per
+- [x] Implement the structured-text renderer: JSON, XML, YAML, NDJSON, pretty-printed, with tests per
       format including malformed-input fallback.
-- [ ] Implement the form-encoded renderer with a key/value table, plus nested-JSON pretty-printing for
+- [x] Implement the form-encoded renderer with a key/value table, plus nested-JSON pretty-printing for
       values that parse as JSON. Test with a GitHub-style `payload=<json>` fixture.
-- [ ] Implement `multipart/form-data` boundary parsing and per-part rendering, with tests covering
+- [x] Implement `multipart/form-data` boundary parsing and per-part rendering, with tests covering
       multiple parts, a file part with a filename, and a part whose own content-type is an image.
-- [ ] Implement the binary/unknown renderer: byte size, hex/ASCII preview, download link. Test that an
+- [x] Implement the binary/unknown renderer: byte size, hex/ASCII preview, download link. Test that an
       unrecognized content-type renders this rather than nothing. **Note:** 0004 already built the
       download path — the bytes are fetched and handed over as an app-owned `application/octet-stream`
       blob URL with `<a download>`, never a link to the body endpoint (the PDF branch of
       `Request.tsx`). Reuse that shape here; do not re-derive it, and keep the cancellation guard
       that revokes a blob whose fetch lands after cleanup.
-- [ ] Keep inline image rendering working for `image/*`.
-- [ ] Wire in highlight.js with only the four languages registered, themed to match 0004's palette.
-- [ ] Implement the ~256 KB display cap with a truncation marker and a full-body download link; test
+- [x] Keep inline image rendering working for `image/*`.
+- [x] Wire in highlight.js with only the four languages registered, themed to match 0004's palette.
+- [x] Implement the ~256 KB display cap with a truncation marker and a full-body download link; test
       the boundary.
-- [ ] Add an explicit empty-body state.
-- [ ] Add a test asserting no code path renders body content as markup — no
+- [x] Add an explicit empty-body state.
+- [x] Add a test asserting no code path renders body content as markup — no
       `dangerouslySetInnerHTML`, no iframe, no navigation to the body URL — so the security invariant
       cannot silently regress.
 
@@ -101,16 +101,51 @@ Research on real-world webhook traffic (see Source) found `application/json` dom
 
 ## Acceptance criteria
 
-- [ ] A JSON body renders pretty-printed and highlighted, including for `+json` vendor subtypes and
+- [x] A JSON body renders pretty-printed and highlighted, including for `+json` vendor subtypes and
       with a `charset` parameter present.
-- [ ] A form-encoded body renders as a key/value table, and a GitHub/Slack-style `payload` parameter
+- [x] A form-encoded body renders as a key/value table, and a GitHub/Slack-style `payload` parameter
       renders as formatted JSON.
-- [ ] A multipart body lists its parts with names, filenames, and content-types, rendering text and
+- [x] A multipart body lists its parts with names, filenames, and content-types, rendering text and
       image parts appropriately.
-- [ ] An unrecognized or binary content-type renders size, a preview, and a download link — never an
+- [x] An unrecognized or binary content-type renders size, a preview, and a download link — never an
       empty panel.
-- [ ] An HTML body is shown as escaped source and is never rendered as markup.
-- [ ] A body over the display cap shows a truncation marker and offers a full download.
+- [x] An HTML body is shown as escaped source and is never rendered as markup.
+- [x] A body over the display cap shows a truncation marker and offers a full download.
 - [x] Mounting the detail view issues exactly one body fetch; no render-phase side effects remain.
       *(Met in task 0004; keep it true.)*
-- [ ] `nosniff` and `content-disposition: attachment` on the body endpoint are unchanged.
+- [x] `nosniff` and `content-disposition: attachment` on the body endpoint are unchanged.
+
+## Implementation log
+
+Built 2026-08-07 on `feature/body-viewer`. Key files: `src/utils/mediaType.ts` (parser +
+`classifyBody` dispatcher + quote-aware `parseParameters`), `src/utils/prettyPrint.ts` (JSON /
+NDJSON / XML formatters, all returning undefined on malformed input), `src/utils/multipart.ts`
+(byte-level boundary parser, RFC-anchored delimiters, skipped-region count),
+`src/utils/hexPreview.ts`, `src/utils/highlight.tsx` (hljs core + 4 languages; output converted
+to React elements through a span whitelist — no markup injection anywhere),
+`src/components/RequestBody.tsx` (the viewer), hljs theme in `src/index.css`, source-scan
+tripwire in `src/components/bodySecurity.test.ts`. `getBody()` was removed from `services.ts`;
+all body reads go through `getBodyBytes()` + `TextDecoder` per the charset parameter.
+
+**Recorded deviations from the spec text:**
+
+- **YAML gets highlighting but no reformatting and no malformed-input note.** Nearly any text is
+  a valid YAML scalar (a prose paragraph parses fine), so a "didn't parse as YAML" note would
+  essentially never fire, and validating would require a parser dependency (`js-yaml`) with no
+  user-visible benefit. YAML is already line-oriented; highlighting is the value.
+- **"No content-type" with non-zero bytes renders the binary view, not the empty-body state.**
+  The spec's empty-body definition ("no content-type, or zero bytes") conflated the two; a body
+  with bytes but no declared type is unknown content, and showing size + preview + download is
+  strictly more honest than "empty". The empty state fires on zero bytes only.
+
+**Review fixes applied (see `reviews/0005-body-viewer-review.md`, all 15 findings):** multipart
+image parts are raster-only (png/jpeg/gif/webp/bmp/avif/ico) and their blobs — like every blob
+the app makes — are typed `application/octet-stream`, never the attacker's declared type, so an
+`image/svg+xml` part can't become a script-capable same-origin document; a failed body fetch
+renders an explicit "couldn't load" state; binary bodies over the cap keep hex-preview + download
+instead of a forced text decode, and the truncated-text prefix honors the charset; form pairs and
+multipart parts are row-capped at 1,000 with an omission note and download; parse/format/highlight
+work is memoized; `parseParameters` honors quoted semicolons and escaped quotes; multipart
+delimiters are CRLF-anchored with unparseable regions surfaced, and empty-header parts kept;
+`Request.tsx` gates the body viewer on the loaded record matching the route; the security scan
+bans markup/navigation sinks app-wide and pins the body endpoint to services.ts + `<img src>`.

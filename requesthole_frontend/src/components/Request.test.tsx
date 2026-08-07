@@ -115,6 +115,20 @@ describe("Request body", () => {
 });
 
 describe("Request load state", () => {
+  // On a route change the first render still holds the previous request's
+  // record, so the body viewer would fire a full-body fetch for the new
+  // address classified under the old content-type.
+  it("does not render the body viewer for a record that doesn't match the route", async () => {
+    vi.mocked(holeService.getRequest).mockResolvedValue({
+      ...captured('{"content-type":"application/json"}'),
+      request_address: "other0",
+    });
+    renderRequest();
+
+    await screen.findByText(/loading request/i);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(holeService.getBodyBytes).not.toHaveBeenCalled();
+  });
   // Rendering the "no headers" empty state before the fetch resolves — and
   // forever after it fails — states something untrue about the request.
   it("waits for the first load rather than claiming there were no headers", () => {
