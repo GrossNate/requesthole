@@ -1,4 +1,135 @@
 @import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+ * RequestHole design system
+ *
+ * Everything visual is declared here — Tailwind v4 is CSS-first, so there is no
+ * JS config file to look for. Three blocks below, in order:
+ *
+ *   1. the daisyUI theme (semantic colors, radii, borders)
+ *   2. @theme tokens (type scale, spacing rhythm, fonts)
+ *   3. a handful of semantic component classes built from those tokens
+ *
+ * Dark only, on purpose: the theme is registered under the name `dark` so the
+ * hardcoded `data-theme="dark"` in index.html keeps working, and no light
+ * palette is compiled. There is no theme switcher.
+ *
+ * The palette is sampled from the logo (public/favicon.png) — a black hole with
+ * a violet/magenta accretion disk on near-black. Measured ramp, darkest first:
+ *   #0c0c0c #240c3c #24243c #3c2454 #3c246c #543c84 #6c3c9c #9c6cb4 #cc9ccc
+ *   #e4cce4 #fce4e4
+ * The disk's hue centre (~#6c3c9c, violet) is the primary; the magenta-to-white
+ * inner edge is the secondary/accent. Task 0005's syntax-highlighting theme
+ * inherits from these variables — extend them here rather than hardcoding hex
+ * in a component.
+ * ------------------------------------------------------------------------- */
+
 @plugin "daisyui" {
-   themes: dark;
- };
+  themes: false;
+}
+
+@plugin "daisyui/theme" {
+  name: "dark";
+  default: true;
+  prefersdark: true;
+  color-scheme: dark;
+
+  /* Surfaces: near-black plum, one step up for panels, one more for borders. */
+  --color-base-100: #120b1e;
+  --color-base-200: #1d1130;
+  --color-base-300: #2c1b47;
+  --color-base-content: #e7e0f2;
+
+  /* The accretion disk, brightened for legibility on a dark surface. */
+  --color-primary: #a06cf0;
+  --color-primary-content: #150c22;
+  --color-secondary: #e08ad8;
+  --color-secondary-content: #1c0f1c;
+  --color-accent: #e4cce4;
+  --color-accent-content: #1d1130;
+
+  --color-neutral: #2a1a44;
+  --color-neutral-content: #d8cfe6;
+
+  --color-info: #7cc0e8;
+  --color-info-content: #0d1620;
+  --color-success: #5ad6a8;
+  --color-success-content: #08201a;
+  --color-warning: #f0b45c;
+  --color-warning-content: #241704;
+  --color-error: #f4707a;
+  --color-error-content: #26080c;
+
+  --radius-selector: 0.5rem;
+  --radius-field: 0.5rem;
+  --radius-box: 0.75rem;
+  --size-selector: 0.25rem;
+  --size-field: 0.25rem;
+  --border: 1px;
+  --depth: 1;
+  --noise: 0;
+}
+
+@theme {
+  /* Type scale. Five named steps, deliberately narrow — a request inspector is
+   * a dense reading surface, so the body/caption end carries most of the work.
+   * Use these (text-body, text-title, …) instead of Tailwind's numeric sizes. */
+  --text-caption: 0.75rem;
+  --text-caption--line-height: 1.05rem;
+  --text-caption--letter-spacing: 0.01em;
+  --text-body: 0.875rem;
+  --text-body--line-height: 1.4rem;
+  --text-lead: 1rem;
+  --text-lead--line-height: 1.6rem;
+  --text-title: 1.25rem;
+  --text-title--line-height: 1.7rem;
+  --text-heading: 1.625rem;
+  --text-heading--line-height: 2.1rem;
+
+  /* Spacing rhythm. Named steps so padding and gaps agree across pages
+   * instead of drifting between p-3, ps-3 and pl-3. */
+  --spacing-tight: 0.5rem;
+  --spacing-snug: 0.75rem;
+  --spacing-gutter: 1.5rem;
+  --spacing-section: 2.5rem;
+
+  --font-mono:
+    ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code", Menlo, Consolas,
+    monospace;
+}
+
+@layer base {
+  body {
+    /* A faint violet wash off the top-left, echoing the disk's falloff. */
+    background-image: radial-gradient(
+      120rem 60rem at 15% -20%,
+      color-mix(in oklab, var(--color-primary) 14%, transparent),
+      transparent 60%
+    );
+    background-attachment: fixed;
+  }
+}
+
+@layer components {
+  /* An address or a path: fixed-width, slightly tightened, never wrapped mid
+   * token. Used for hole/request addresses, capture URLs and request paths. */
+  .address {
+    @apply font-mono text-body tracking-tight whitespace-nowrap;
+  }
+
+  /* The one page-level heading each route gets. */
+  .page-title {
+    @apply text-heading text-base-content font-semibold;
+  }
+
+  /* Small uppercase label above a group — table captions, field names. */
+  .section-label {
+    @apply text-caption text-base-content/50 font-semibold tracking-widest uppercase;
+  }
+
+  /* The scrolling region every list sits in. Replaces the copy-pasted
+   * `h-full overflow-y-auto pb-16` on all three pages. */
+  .scroll-pane {
+    @apply pb-section min-h-0 flex-1 overflow-y-auto;
+  }
+}

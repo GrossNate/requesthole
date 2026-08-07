@@ -101,20 +101,22 @@ That serves the UI on `http://localhost:5173`. A dev build talks to the backend
 cross-origin at `localhost:3000`, which the backend's CORS config allows; a
 production build uses relative URLs and goes through Nginx instead.
 
-The test suite lives in the backend project:
+Both projects test the same way — typecheck, then Vitest:
 
 ```sh
-cd requesthole_backend && npm test        # typecheck, then Vitest
+cd requesthole_backend  && npm test
+cd requesthole_frontend && npm test
 ```
 
-It runs against in-memory and temporary-file SQLite databases, so it needs
-neither Docker nor a running server. The frontend has no tests yet. Both
-projects lint, and both typecheck — the frontend does it as the first half of
-its build:
+The backend suite runs against in-memory and temporary-file SQLite databases,
+so it needs neither Docker nor a running server. The frontend suite runs in
+jsdom with Testing Library; its tests sit next to the code they cover, as
+`src/**/*.test.ts(x)`. Both projects lint, and both typecheck — the frontend
+does it as the first half of its build:
 
 ```sh
-(cd requesthole_backend  && npm run lint && npm run typecheck)
-(cd requesthole_frontend && npm run lint && npm run build)
+(cd requesthole_backend  && npm run lint && npm run typecheck && npm test)
+(cd requesthole_frontend && npm run lint && npm run build && npm test)
 ```
 
 ## Configuration
