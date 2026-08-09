@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import holeService from "../services";
 import RequestBody, {
   DISPLAY_CAP_BYTES,
@@ -92,6 +92,20 @@ describe("JSON bodies", () => {
     renderBody("application/json");
 
     expect(await screen.findByText(/couldn't load this body/i)).toBeVisible();
+  });
+
+  // The charset label is attacker-controlled; an unknown label must fall
+  // back to UTF-8, never let TextDecoder's RangeError take the view down.
+  it("falls back to UTF-8 when the charset label is junk", async () => {
+    vi.mocked(holeService.getBodyBytes).mockResolvedValue(
+      toBytes('{"ok":true}'),
+    );
+    const { container } = renderBody(
+      "application/json; charset=x-attacker-junk",
+    );
+
+    await screen.findByText(/"ok"/);
+    expect(container.textContent).toContain('"ok": true');
   });
 });
 
@@ -210,6 +224,23 @@ describe("form-encoded bodies", () => {
     const download = await screen.findByRole("link", { name: /download/i });
     expect(download.getAttribute("href")).toBe("blob:whole");
   });
+
+  // Pin the boundary itself, as the byte cap does — an off-by-one in the
+  // slice or a spurious "0 more" note would pass the over-the-cap test.
+  it("renders exactly the cap's worth of rows in full, with no omission note", async () => {
+    const pairs = Array.from(
+      { length: MAX_RENDERED_ROWS },
+      (_, i) => `k${i}=v${i}`,
+    ).join("&");
+    vi.mocked(holeService.getBodyBytes).mockResolvedValue(toBytes(pairs));
+    const { container } = renderBody("application/x-www-form-urlencoded");
+
+    await screen.findByRole("rowheader", { name: "k0" });
+    expect(container.querySelectorAll("tbody tr")).toHaveLength(
+      MAX_RENDERED_ROWS,
+    );
+    expect(screen.queryByText(/more pairs not shown/i)).not.toBeInTheDocument();
+  });
 });
 
 describe("multipart bodies", () => {
@@ -271,10 +302,16 @@ describe("multipart bodies", () => {
   });
 
   // SVG needs its MIME type to render, and an SVG document can run script —
-  // so an image/svg+xml part must never become a typed blob or an <img>; it
-  // falls through to the byte-count rendering instead.
-  it("treats an SVG image part as binary, creating no blob at all", async () => {
-    const createObjectURL = vi.fn(() => "blob:part");
+  // so an image/svg+xml part must never render in an <img> or become a blob
+  // carrying its own type. It gets the binary treatment: a download whose
+  // blob is application/octet-stream, which a browser downloads rather than
+  // renders even if navigated to.
+  it("treats an SVG image part as binary, never an image or a typed blob", async () => {
+    let createdBlob: Blob | undefined;
+    const createObjectURL = vi.fn((blob: Blob) => {
+      createdBlob = blob;
+      return "blob:part";
+    });
     vi.stubGlobal("URL", { createObjectURL, revokeObjectURL: vi.fn() });
     vi.mocked(holeService.getBodyBytes).mockResolvedValue(
       toBytes(
@@ -294,7 +331,9 @@ describe("multipart bodies", () => {
     await screen.findByText("evil.svg");
     expect(await screen.findByText(/29 bytes/)).toBeVisible();
     expect(container.querySelector("img")).toBeNull();
-    expect(createObjectURL).not.toHaveBeenCalled();
+    expect(createdBlob?.type).toBe("application/octet-stream");
+    const download = await screen.findByRole("link", { name: /download/i });
+    expect(download).toHaveAttribute("download", "evil.svg");
   });
 
   // An inspector must never silently omit content.
@@ -341,6 +380,38 @@ describe("multipart bodies", () => {
 
     await screen.findByText(/50 more parts not shown/i);
     expect(container.querySelectorAll("li")).toHaveLength(MAX_RENDERED_ROWS);
+  });
+
+  // A captured PDF or zip part must stay reachable: byte count alone strands
+  // the bytes the inspector captured, with no preview and no way to get them.
+  it("gives a binary part a hex preview and its own download", async () => {
+    let createdBlob: Blob | undefined;
+    const createObjectURL = vi.fn((blob: Blob) => {
+      createdBlob = blob;
+      return "blob:part";
+    });
+    vi.stubGlobal("URL", { createObjectURL, revokeObjectURL: vi.fn() });
+    vi.mocked(holeService.getBodyBytes).mockResolvedValue(
+      toBytes(
+        [
+          "--B",
+          'content-disposition: form-data; name="doc"; filename="report.pdf"',
+          "content-type: application/pdf",
+          "",
+          "%PDF-1.7 pretend",
+          "--B--",
+          "",
+        ].join("\r\n"),
+      ),
+    );
+    const { container } = renderBody("multipart/form-data; boundary=B");
+
+    expect(await screen.findByText(/16 bytes/)).toBeVisible();
+    expect(container.textContent).toContain("|%PDF-1.7 pretend|");
+    const download = await screen.findByRole("link", { name: /download/i });
+    expect(download.getAttribute("href")).toBe("blob:part");
+    expect(download).toHaveAttribute("download", "report.pdf");
+    expect(createdBlob?.type).toBe("application/octet-stream");
   });
 
   // Multipart bodies skip the body-level byte cap (an upload with one big
@@ -562,5 +633,19 @@ describe("image bodies", () => {
 
     await settle();
     expect(holeService.getBodyBytes).not.toHaveBeenCalled();
+  });
+
+  // An image-typed request with an empty body, a non-image payload, or a
+  // downed backend would otherwise show a bare broken-image glyph — the
+  // unexplained-nothing failure every other family has an explicit state for.
+  it("explains itself when the image fails to load", async () => {
+    const { container } = renderBody("image/png");
+
+    fireEvent.error(container.querySelector("img")!);
+
+    expect(
+      await screen.findByText(/couldn't display this image/i),
+    ).toBeVisible();
+    expect(container.querySelector("img")).toBeNull();
   });
 });

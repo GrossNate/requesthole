@@ -136,7 +136,15 @@ all body reads go through `getBodyBytes()` + `TextDecoder` per the charset param
 - **"No content-type" with non-zero bytes renders the binary view, not the empty-body state.**
   The spec's empty-body definition ("no content-type, or zero bytes") conflated the two; a body
   with bytes but no declared type is unknown content, and showing size + preview + download is
-  strictly more honest than "empty". The empty state fires on zero bytes only.
+  strictly more honest than "empty". The empty state fires on zero bytes only. (An image-typed
+  body that fails to load — empty, corrupt, or backend down — gets its own explicit "couldn't
+  display" state via `<img onError>`.)
+- **Multipart bodies skip the whole-body ~256 KB display cap.** An upload with one large file
+  part should still list its parts rather than collapse to a truncated text dump, so the caps
+  apply per part instead: each text part is capped at 256 KB with a truncation marker, parts are
+  row-capped at 1,000 with an omission note and a whole-body download, and binary parts render a
+  fixed-size hex preview plus their own download. Aggregate DOM size stays bounded by those two
+  caps; the single-number byte cap is deliberately not enforced across parts.
 
 **Review fixes applied (see `reviews/0005-body-viewer-review.md`, all 15 findings):** multipart
 image parts are raster-only (png/jpeg/gif/webp/bmp/avif/ico) and their blobs — like every blob

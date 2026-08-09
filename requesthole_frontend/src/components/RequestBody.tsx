@@ -56,6 +56,8 @@ function useOwnedBlobUrl(
 
   useEffect(() => {
     if (!enabled) return;
+    // The cast bridges a TS lib gap: Uint8Array's generic ArrayBufferLike
+    // backing isn't assignable to BlobPart, though Blob accepts it at runtime.
     const objectUrl = URL.createObjectURL(
       new Blob([bytes as unknown as BlobPart], {
         type: "application/octet-stream",
@@ -149,8 +151,10 @@ const RequestBody = ({
 
   const [bytes, setBytes] = useState<Uint8Array>();
   const [failed, setFailed] = useState(false);
+  const [imageFailed, setImageFailed] = useState(false);
 
   useEffect(() => {
+    setImageFailed(false);
     if (family === "image") return;
     let current = true;
     setBytes(undefined);
@@ -172,13 +176,24 @@ const RequestBody = ({
   }, [requestAddress, family]);
 
   if (family === "image") {
+    // A bare broken-image glyph explains nothing; every other family has an
+    // explicit state for an empty, wrong, or unloadable body.
     return (
       <BodySection>
-        <img
-          alt="Captured request body"
-          className="border-base-300 rounded-box max-w-full border"
-          src={`${holeService.BASE_URL}/api/request/${requestAddress}/body`}
-        />
+        {imageFailed ? (
+          <EmptyState
+            compact
+            title="Couldn't display this image"
+            description="The body may be empty, not actually an image, or the backend may be down."
+          />
+        ) : (
+          <img
+            alt="Captured request body"
+            className="border-base-300 rounded-box max-w-full border"
+            src={`${holeService.BASE_URL}/api/request/${requestAddress}/body`}
+            onError={() => setImageFailed(true)}
+          />
+        )}
       </BodySection>
     );
   }
@@ -519,26 +534,29 @@ const MultipartPartContent = ({ part }: { part: MultipartPart }) => {
   const family = classifyBody(partMedia);
   const isRaster =
     family === "image" && RASTER_IMAGE_SUBTYPES.has(partMedia!.subtype);
-  const imageUrl = useOwnedBlobUrl(part.bytes, isRaster);
+  // A part with no content-type is text by multipart convention; declared
+  // text-ish families render as text too. Everything else — including
+  // non-raster images like SVG, which could execute as a document — gets the
+  // binary treatment: preview plus download, so a captured file part is
+  // never stranded as a bare byte count.
+  const isTextual =
+    part.contentType === undefined ||
+    (family !== "binary" && family !== "image" && family !== "multipart");
+  const blobUrl = useOwnedBlobUrl(part.bytes, !isTextual);
 
   if (isRaster) {
-    return imageUrl ? (
+    return blobUrl ? (
       <img
         alt={`Captured part ${part.name ?? ""}`}
         className="border-base-300 rounded-box max-w-full border"
-        src={imageUrl}
+        src={blobUrl}
       />
     ) : null;
   }
 
-  // A part with no content-type is text by multipart convention; declared
-  // text-ish families render as text too. Anything else — including
-  // non-raster images like SVG, which could execute as a document — stays a
-  // byte count. The whole body skips the byte cap so parts can render, which
-  // makes the per-part cap here the only bound on an oversized text part.
-  const isTextual =
-    family !== "binary" && family !== "image" && family !== "multipart";
-  if (part.contentType === undefined || isTextual) {
+  if (isTextual) {
+    // The whole body skips the byte cap so parts can render, which makes the
+    // per-part cap here the only bound on an oversized text part.
     const overCap = part.bytes.byteLength > DISPLAY_CAP_BYTES;
     return (
       <>
@@ -559,9 +577,16 @@ const MultipartPartContent = ({ part }: { part: MultipartPart }) => {
   }
 
   return (
-    <span className="text-caption text-base-content/60">
-      {part.bytes.byteLength.toLocaleString()} bytes
-    </span>
+    <div className="gap-tight flex flex-col">
+      <span className="text-caption text-base-content/60">
+        {part.bytes.byteLength.toLocaleString()} bytes
+      </span>
+      <CodeBlock text={hexPreview(part.bytes)} />
+      <DownloadLink
+        url={blobUrl}
+        filename={part.filename ?? `${part.name ?? "part"}.bin`}
+      />
+    </div>
   );
 };
 

@@ -38,6 +38,9 @@ const MARKUP_SINKS = [
   /document\.write/,
   /createContextualFragment/,
   /<iframe|<embed|<object/i,
+  // DOM-API construction of an embeddable element is the same sink without
+  // the angle bracket.
+  /createElement\s*\(\s*["'`](iframe|embed|object|script|frame)/i,
 ];
 
 /** Navigation sinks: any of these can load attacker content as a document. */
@@ -45,8 +48,11 @@ const NAVIGATION_SINKS = [
   /window\.open\s*\(/,
   /location\.assign\s*\(/,
   /location\.replace\s*\(/,
-  /window\.location\s*=/,
-  /location\.href\s*=/,
+  // Any alias that reaches the location object: window/document/top/self/
+  // parent-qualified or bare, assigned directly or via href.
+  /\b(window|document|top|self|parent)\.location\s*=/,
+  /\blocation\.href\s*=/,
+  /Object\.assign\s*\(\s*(window\.|document\.)?location\b/,
 ];
 
 describe("the untrusted-body invariant", () => {
