@@ -96,9 +96,10 @@ export function prettyXml(text: string): string | undefined {
   // The XML declaration never reaches the DOM, and the DOM's DocumentType
   // drops the internal subset — exactly what someone inspecting a
   // suspected-XXE request needs to see — so both are carried over from the
-  // source text verbatim.
+  // source text verbatim. The declaration can only sit at the very start;
+  // the doctype is found by scanning the prolog (see extractDoctype).
   const declaration = text.match(/^\s*(<\?xml\s[\s\S]*?\?>)/)?.[1];
-  const doctypeSource = text.match(/<!DOCTYPE[^[>]*(?:\[[\s\S]*?\])?>/i)?.[0];
+  const doctypeSource = extractDoctype(text);
 
   // Walk the parsed DOM rather than regex-splitting a serialized string:
   // formatting may only move whitespace between nodes, and a text split
@@ -118,6 +119,59 @@ export function prettyXml(text: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The DOCTYPE declaration from the document prolog, verbatim from source.
+ * This scans rather than regex-matches the body: a doctype-shaped string
+ * inside a prolog comment must not shadow the real one, and quoted literals
+ * may legally contain ">", "[", and "]>", which no single regex survives.
+ */
+function extractDoctype(text: string): string | undefined {
+  let i = 0;
+  while (i < text.length) {
+    while (i < text.length && " \t\r\n".includes(text[i])) i += 1;
+    if (text.startsWith("<?", i)) {
+      const end = text.indexOf("?>", i);
+      if (end === -1) return undefined;
+      i = end + 2;
+    } else if (text.startsWith("<!--", i)) {
+      const end = text.indexOf("-->", i);
+      if (end === -1) return undefined;
+      i = end + 3;
+    } else if (/^<!DOCTYPE/i.test(text.slice(i, i + 9))) {
+      return scanDoctype(text, i);
+    } else {
+      // The root element (or anything else): no doctype in the prolog.
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+/** Scans one DOCTYPE declaration, honoring quotes and the internal subset. */
+function scanDoctype(text: string, start: number): string | undefined {
+  let quote: string | undefined;
+  let inSubset = false;
+  for (let i = start + "<!DOCTYPE".length; i < text.length; i += 1) {
+    const c = text[i];
+    if (quote !== undefined) {
+      if (c === quote) quote = undefined;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+    } else if (inSubset && text.startsWith("<!--", i)) {
+      const end = text.indexOf("-->", i);
+      if (end === -1) return undefined;
+      i = end + 2;
+    } else if (c === "[") {
+      inSubset = true;
+    } else if (c === "]") {
+      inSubset = false;
+    } else if (c === ">" && !inSubset) {
+      return text.slice(start, i + 1);
+    }
+  }
+  return undefined;
 }
 
 function escapeXmlAttribute(value: string): string {
@@ -163,8 +217,14 @@ function serializeXmlInline(node: Node, depth: number): string {
       return `<![CDATA[${node.nodeValue ?? ""}]]>`;
     case Node.COMMENT_NODE:
       return `<!--${node.nodeValue ?? ""}-->`;
+    case Node.PROCESSING_INSTRUCTION_NODE: {
+      const instruction = node as ProcessingInstruction;
+      return `<?${instruction.target} ${instruction.data}?>`;
+    }
     default:
-      return "";
+      // A node type this walk doesn't know must never be silently elided —
+      // bail to the raw fallback instead.
+      throw new RangeError("unserializable node type");
   }
 }
 

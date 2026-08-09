@@ -155,6 +155,38 @@ describe("prettyXml", () => {
     );
   });
 
+  it("keeps a processing instruction inside mixed content", () => {
+    expect(prettyXml("<p>foo <?pi data?> <b>bar</b> baz</p>")).toBe(
+      "<p>foo <?pi data?> <b>bar</b> baz</p>",
+    );
+  });
+
+  // The doctype is read by scanning the prolog, not by regex over the whole
+  // body: a doctype-shaped string inside a comment must not shadow the real
+  // one, and quoted literals may legally contain ">", "[", and "]>".
+  it("is not fooled by a doctype-shaped string inside a prolog comment", () => {
+    expect(prettyXml("<!-- <!DOCTYPE fake> --><!DOCTYPE real><r/>")).toBe(
+      `<!-- <!DOCTYPE fake> -->
+<!DOCTYPE real>
+<r/>`,
+    );
+  });
+
+  it("keeps doctypes whose quoted literals contain '>', '[', or ']>'", () => {
+    expect(prettyXml('<!DOCTYPE r SYSTEM "a>b.dtd"><r/>')).toBe(
+      `<!DOCTYPE r SYSTEM "a>b.dtd">
+<r/>`,
+    );
+    expect(prettyXml('<!DOCTYPE r SYSTEM "weird[.dtd"><r/>')).toBe(
+      `<!DOCTYPE r SYSTEM "weird[.dtd">
+<r/>`,
+    );
+    expect(prettyXml('<!DOCTYPE r [<!ENTITY x "]>">]><r/>')).toBe(
+      `<!DOCTYPE r [<!ENTITY x "]>">]>
+<r/>`,
+    );
+  });
+
   // Same crash mode as JSON: recursion and quadratic indentation on deep
   // nesting must bail to raw display, never throw during render.
   it("refuses pathologically deep nesting instead of blowing up", () => {
