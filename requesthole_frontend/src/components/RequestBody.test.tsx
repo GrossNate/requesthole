@@ -81,7 +81,7 @@ describe("JSON bodies", () => {
     );
     const { container } = renderBody("application/json");
 
-    await screen.findByText(/didn't parse as JSON/i);
+    await screen.findByText(/couldn't be formatted as JSON/i);
     expect(container.textContent).toContain('{"unclosed":');
   });
 

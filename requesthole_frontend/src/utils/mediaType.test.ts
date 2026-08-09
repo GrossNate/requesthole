@@ -33,6 +33,14 @@ describe("parseMediaType", () => {
     });
   });
 
+  // A valueless token must be skipped whole — naively seeking the next `=`
+  // would swallow its `;` into the following parameter's name and lose it.
+  it("skips a valueless parameter token", () => {
+    expect(
+      parseMediaType("multipart/form-data; flag; boundary=B")?.parameters,
+    ).toEqual({ boundary: "B" });
+  });
+
   // RFC 2046 allows `;` and `\"`-escaped quotes inside a quoted value; a bare
   // split on `;` corrupts the boundary and every part-split misses.
   it("keeps semicolons and escaped quotes inside a quoted value intact", () => {

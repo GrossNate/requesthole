@@ -51,6 +51,15 @@ describe("prettyJson", () => {
 }`,
     );
   });
+
+  // A 20 KB body of nested brackets — well under the display cap — indents
+  // to a quadratically larger string and past ~60k levels the concatenation
+  // throws RangeError. Formatting must refuse (raw fallback), never crash
+  // the app.
+  it("refuses pathologically deep nesting instead of blowing up", () => {
+    const deep = "[".repeat(10_000) + "]".repeat(10_000);
+    expect(prettyJson(deep)).toBeUndefined();
+  });
 });
 
 describe("prettyNdjson", () => {
@@ -111,5 +120,45 @@ describe("prettyXml", () => {
   <b/>
 </a>`,
     );
+  });
+
+  // Block-formatting mixed content would trim the spaces around inline
+  // elements — data, in an inspector. Mixed content stays inline verbatim.
+  it("keeps mixed element/text content inline with its whitespace", () => {
+    expect(prettyXml("<p>foo <b>bar</b> baz</p>")).toBe(
+      "<p>foo <b>bar</b> baz</p>",
+    );
+  });
+
+  // The declaration and the DOCTYPE's ids and internal subset are content —
+  // the internal subset is exactly what someone inspecting a suspected-XXE
+  // request needs to see.
+  it("keeps the XML declaration and full DOCTYPE", () => {
+    expect(
+      prettyXml('<?xml version="1.0" encoding="utf-8"?><root a="1"/>'),
+    ).toBe(
+      `<?xml version="1.0" encoding="utf-8"?>
+<root a="1"/>`,
+    );
+    expect(prettyXml('<!DOCTYPE foo [<!ENTITY x "y">]><root/>')).toBe(
+      `<!DOCTYPE foo [<!ENTITY x "y">]>
+<root/>`,
+    );
+  });
+
+  it("keeps a processing instruction", () => {
+    expect(
+      prettyXml('<?xml-stylesheet href="s.xsl" type="text/xsl"?><root/>'),
+    ).toBe(
+      `<?xml-stylesheet href="s.xsl" type="text/xsl"?>
+<root/>`,
+    );
+  });
+
+  // Same crash mode as JSON: recursion and quadratic indentation on deep
+  // nesting must bail to raw display, never throw during render.
+  it("refuses pathologically deep nesting instead of blowing up", () => {
+    const deep = "<a>".repeat(5_000) + "</a>".repeat(5_000);
+    expect(prettyXml(deep)).toBeUndefined();
   });
 });

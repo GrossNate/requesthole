@@ -5,6 +5,14 @@
  * to showing the raw text with a note.
  */
 
+/**
+ * Nesting deeper than this refuses to format (raw fallback) rather than
+ * blow up: indentation grows quadratically with depth, and a 20 KB body of
+ * nested brackets — far under the display cap — would otherwise produce a
+ * hundreds-of-megabytes string or throw mid-render.
+ */
+const MAX_FORMAT_DEPTH = 100;
+
 export function prettyJson(text: string): string | undefined {
   // Parse only to validate. The output is built by re-indenting the original
   // tokens, never by re-serializing the parsed value: a parse/stringify
@@ -15,11 +23,18 @@ export function prettyJson(text: string): string | undefined {
   } catch {
     return undefined;
   }
-  return reindentJson(text);
+  try {
+    return reindentJson(text);
+  } catch {
+    return undefined;
+  }
 }
 
-/** Re-indents valid JSON by moving whitespace between tokens, nothing else. */
-function reindentJson(text: string): string {
+/**
+ * Re-indents valid JSON by moving whitespace between tokens, nothing else.
+ * Returns undefined past MAX_FORMAT_DEPTH.
+ */
+function reindentJson(text: string): string | undefined {
   let out = "";
   let depth = 0;
   let i = 0;
@@ -49,6 +64,7 @@ function reindentJson(text: string): string {
         out += c + closer;
       } else {
         depth += 1;
+        if (depth > MAX_FORMAT_DEPTH) return undefined;
         out += `${c}\n${indent()}`;
         continue;
       }
@@ -77,14 +93,31 @@ export function prettyXml(text: string): string | undefined {
   const doc = new DOMParser().parseFromString(text, "application/xml");
   if (doc.getElementsByTagName("parsererror").length > 0) return undefined;
 
+  // The XML declaration never reaches the DOM, and the DOM's DocumentType
+  // drops the internal subset — exactly what someone inspecting a
+  // suspected-XXE request needs to see — so both are carried over from the
+  // source text verbatim.
+  const declaration = text.match(/^\s*(<\?xml\s[\s\S]*?\?>)/)?.[1];
+  const doctypeSource = text.match(/<!DOCTYPE[^[>]*(?:\[[\s\S]*?\])?>/i)?.[0];
+
   // Walk the parsed DOM rather than regex-splitting a serialized string:
   // formatting may only move whitespace between nodes, and a text split
   // would rewrite the inside of CDATA sections and comments — which is
-  // data, and must survive verbatim.
-  return Array.from(doc.childNodes)
-    .map((node) => serializeXmlNode(node, 0))
-    .filter((line) => line !== "")
-    .join("\n");
+  // data, and must survive verbatim. The walk throws past MAX_FORMAT_DEPTH
+  // (see reindentJson's rationale); that bails to the raw fallback.
+  try {
+    const lines = Array.from(doc.childNodes)
+      .map((node) =>
+        node.nodeType === Node.DOCUMENT_TYPE_NODE
+          ? (doctypeSource ?? `<!DOCTYPE ${(node as DocumentType).name}>`)
+          : serializeXmlNode(node, 0),
+      )
+      .filter((line) => line !== "");
+    if (declaration) lines.unshift(declaration);
+    return lines.join("\n");
+  } catch {
+    return undefined;
+  }
 }
 
 function escapeXmlAttribute(value: string): string {
@@ -108,12 +141,41 @@ function openXmlTag(element: Element): string {
   return `<${element.tagName}${attributes}`;
 }
 
+/**
+ * Serializes a node with no reformatting at all — used for mixed
+ * element/text content, where the whitespace around inline elements is data
+ * that block indentation would rewrite.
+ */
+function serializeXmlInline(node: Node, depth: number): string {
+  if (depth > MAX_FORMAT_DEPTH) throw new RangeError("nesting too deep");
+  switch (node.nodeType) {
+    case Node.ELEMENT_NODE: {
+      const element = node as Element;
+      if (element.childNodes.length === 0) return `${openXmlTag(element)}/>`;
+      const content = Array.from(element.childNodes)
+        .map((child) => serializeXmlInline(child, depth + 1))
+        .join("");
+      return `${openXmlTag(element)}>${content}</${element.tagName}>`;
+    }
+    case Node.TEXT_NODE:
+      return escapeXmlText(node.nodeValue ?? "");
+    case Node.CDATA_SECTION_NODE:
+      return `<![CDATA[${node.nodeValue ?? ""}]]>`;
+    case Node.COMMENT_NODE:
+      return `<!--${node.nodeValue ?? ""}-->`;
+    default:
+      return "";
+  }
+}
+
 function serializeXmlNode(node: Node, depth: number): string {
+  if (depth > MAX_FORMAT_DEPTH) throw new RangeError("nesting too deep");
   const pad = "  ".repeat(depth);
   switch (node.nodeType) {
     case Node.ELEMENT_NODE: {
       const element = node as Element;
-      const children = Array.from(element.childNodes).filter(
+      const allChildren = Array.from(element.childNodes);
+      const children = allChildren.filter(
         (child) =>
           !(
             child.nodeType === Node.TEXT_NODE &&
@@ -136,6 +198,19 @@ function serializeXmlNode(node: Node, depth: number): string {
               ? `<![CDATA[${child.nodeValue ?? ""}]]>`
               : escapeXmlText(child.nodeValue ?? ""),
           )
+          .join("");
+        return `${pad}${openXmlTag(element)}>${content}</${element.tagName}>`;
+      }
+
+      // Mixed element/text content is kept inline verbatim (unfiltered
+      // children): block-formatting it would trim the spaces around inline
+      // elements, which is data.
+      const isMixed =
+        children.some((child) => child.nodeType === Node.ELEMENT_NODE) &&
+        children.some((child) => child.nodeType === Node.TEXT_NODE);
+      if (isMixed) {
+        const content = allChildren
+          .map((child) => serializeXmlInline(child, depth + 1))
           .join("");
         return `${pad}${openXmlTag(element)}>${content}</${element.tagName}>`;
       }

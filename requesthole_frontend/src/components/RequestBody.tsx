@@ -353,7 +353,8 @@ const StructuredTextBody = ({
       {formatted === undefined ? (
         <>
           <p className="text-caption text-warning">
-            This body didn't parse as {claimed}; showing it as raw text.
+            This body couldn't be formatted as {claimed}; showing it as raw
+            text.
           </p>
           <CodeBlock text={text} />
         </>
@@ -388,8 +389,9 @@ const FormEncodedBody = ({
       {omitted > 0 ? (
         <p className="text-caption text-warning">
           {pairs.length.toLocaleString()} pairs — showing the first{" "}
-          {MAX_RENDERED_ROWS.toLocaleString()}, {omitted.toLocaleString()} more
-          pairs not shown. Download the body to see all of them.
+          {MAX_RENDERED_ROWS.toLocaleString()}, {omitted.toLocaleString()} more{" "}
+          {omitted === 1 ? "pair" : "pairs"} not shown. Download the body to see
+          all of them.
         </p>
       ) : null}
       <div className="border-base-300 rounded-box overflow-hidden border">
@@ -491,8 +493,9 @@ const MultipartBody = ({
       {omitted > 0 ? (
         <p className="text-caption text-warning">
           {parts.length.toLocaleString()} parts — showing the first{" "}
-          {MAX_RENDERED_ROWS.toLocaleString()}, {omitted.toLocaleString()} more
-          parts not shown. Download the body to see all of them.
+          {MAX_RENDERED_ROWS.toLocaleString()}, {omitted.toLocaleString()} more{" "}
+          {omitted === 1 ? "part" : "parts"} not shown. Download the body to see
+          all of them.
         </p>
       ) : null}
       <ul className="gap-tight flex list-none flex-col">
