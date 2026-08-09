@@ -95,9 +95,9 @@ Research on real-world webhook traffic (see Source) found `application/json` dom
 
 ## Human-in-the-loop tasks
 
-- [ ] [verify] Look at highlighted output for JSON, XML, and an HTML source body against the dark
+- [x] [verify] Look at highlighted output for JSON, XML, and an HTML source body against the dark
       palette and confirm it is readable and not garish — colour harmony is a judgment no assertion
-      can make.
+      can make. *(Verified by Nathan 2026-08-08: looks okay.)*
 
 ## Acceptance criteria
 
