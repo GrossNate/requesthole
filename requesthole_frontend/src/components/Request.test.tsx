@@ -8,10 +8,14 @@ vi.mock("../services", () => ({
   default: {
     BASE_URL: "",
     getRequest: vi.fn(),
-    getBody: vi.fn(),
     getBodyBytes: vi.fn(),
   },
 }));
+
+const toBytes = (text: string) => {
+  const encoded = new TextEncoder().encode(text);
+  return encoded.buffer.slice(0, encoded.byteLength) as ArrayBuffer;
+};
 
 const renderRequest = () =>
   render(
@@ -38,7 +42,6 @@ beforeEach(() => {
   vi.mocked(holeService.getRequest).mockResolvedValue(
     captured('{"user-agent":"curl/8.7.1"}'),
   );
-  vi.mocked(holeService.getBody).mockResolvedValue("");
   vi.mocked(holeService.getBodyBytes).mockResolvedValue(new ArrayBuffer(0));
 });
 
@@ -76,86 +79,56 @@ describe("Request detail", () => {
 });
 
 describe("Request body", () => {
-  // The fetch used to run during render, so each response re-rendered the
-  // component and fetched again — an unbounded request loop for JSON bodies.
-  it("fetches a JSON body once, not once per render", async () => {
+  // The per-family rendering lives in RequestBody.test.tsx; these pin the
+  // integration — the detail view passes the captured content-type through
+  // and the body is fetched exactly once per mount, not once per render
+  // (which used to be an unbounded request loop).
+  it("renders a JSON body through the content-aware viewer, fetching once", async () => {
     vi.mocked(holeService.getRequest).mockResolvedValue(
       captured('{"content-type":"application/json"}'),
     );
-    vi.mocked(holeService.getBody).mockResolvedValue('{"hello":"world"}');
-    renderRequest();
+    vi.mocked(holeService.getBodyBytes).mockResolvedValue(
+      toBytes('{"hello":"world"}'),
+    );
+    const { container } = renderRequest();
 
-    await screen.findByText(/hello/);
+    await waitFor(() =>
+      expect(container.textContent).toContain('"hello": "world"'),
+    );
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(holeService.getBody).toHaveBeenCalledTimes(1);
+    expect(holeService.getBodyBytes).toHaveBeenCalledTimes(1);
   });
 
   it("fetches a text body once", async () => {
     vi.mocked(holeService.getRequest).mockResolvedValue(
       captured('{"content-type":"text/plain"}'),
     );
-    vi.mocked(holeService.getBody).mockResolvedValue("a plain text body");
+    vi.mocked(holeService.getBodyBytes).mockResolvedValue(
+      toBytes("a plain text body"),
+    );
     renderRequest();
 
     await screen.findByText("a plain text body");
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(holeService.getBody).toHaveBeenCalledTimes(1);
-  });
-
-  // Captured bodies are attacker-controlled and must never be navigated to on
-  // this origin, whatever headers the endpoint sets.
-  it("offers a PDF as a locally-built download, never a link to the body URL", async () => {
-    vi.stubGlobal("URL", {
-      createObjectURL: vi.fn(() => "blob:fake"),
-      revokeObjectURL: vi.fn(),
-    });
-    vi.mocked(holeService.getRequest).mockResolvedValue(
-      captured('{"content-type":"application/pdf"}'),
-    );
-    renderRequest();
-
-    const download = await screen.findByRole("link", { name: /pdf/i });
-    await waitFor(() =>
-      expect(download.getAttribute("href")).toBe("blob:fake"),
-    );
-    expect(download).toHaveAttribute("download");
-    // The accessible name never contains the href, so asserting on the name
-    // would pass for any implementation. Assert on the href itself.
-    expect(download.getAttribute("href")).not.toMatch(/\/api\/request/);
-  });
-
-  // Under StrictMode the first effect run is always cleaned up before its fetch
-  // resolves, so a blob built afterwards would never be revoked.
-  it("revokes a blob whose fetch lands after the viewer is gone", async () => {
-    const revokeObjectURL = vi.fn();
-    vi.stubGlobal("URL", {
-      createObjectURL: vi.fn(() => "blob:fake"),
-      revokeObjectURL,
-    });
-    let resolveBytes: (bytes: ArrayBuffer) => void = () => {};
-    vi.mocked(holeService.getBodyBytes).mockReturnValue(
-      new Promise((resolve) => {
-        resolveBytes = resolve;
-      }),
-    );
-    vi.mocked(holeService.getRequest).mockResolvedValue(
-      captured('{"content-type":"application/pdf"}'),
-    );
-    const { unmount } = renderRequest();
-    // Not by link role — until the bytes land the anchor has no href, so it is
-    // not a link yet.
-    await screen.findByText(/download pdf/i);
-
-    unmount();
-    resolveBytes(new ArrayBuffer(8));
-
-    await waitFor(() =>
-      expect(revokeObjectURL).toHaveBeenCalledWith("blob:fake"),
-    );
+    expect(holeService.getBodyBytes).toHaveBeenCalledTimes(1);
   });
 });
 
 describe("Request load state", () => {
+  // On a route change the first render still holds the previous request's
+  // record, so the body viewer would fire a full-body fetch for the new
+  // address classified under the old content-type.
+  it("does not render the body viewer for a record that doesn't match the route", async () => {
+    vi.mocked(holeService.getRequest).mockResolvedValue({
+      ...captured('{"content-type":"application/json"}'),
+      request_address: "other0",
+    });
+    renderRequest();
+
+    await screen.findByText(/loading request/i);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(holeService.getBodyBytes).not.toHaveBeenCalled();
+  });
   // Rendering the "no headers" empty state before the fetch resolves — and
   // forever after it fails — states something untrue about the request.
   it("waits for the first load rather than claiming there were no headers", () => {

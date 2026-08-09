@@ -10,10 +10,7 @@ import { formatTimestamp } from "../utils/format";
 import { isAddress } from "../utils/address";
 import EmptyState from "./EmptyState";
 import MethodBadge from "./MethodBadge";
-
-/** Content types the viewer renders inline as escaped text. */
-const TEXTUAL =
-  /(text\/)|(application\/xml)|(application\/javascript)|(multipart\/form-data)|(application\/x-www-form-urlencoded)/;
+import RequestBody from "./RequestBody";
 
 const RequestHeaders = ({ headers }: { headers: RequestHeadersObject }) => {
   const headerKeys = Object.keys(headers);
@@ -55,130 +52,6 @@ const RequestHeaders = ({ headers }: { headers: RequestHeadersObject }) => {
       </div>
     </section>
   );
-};
-
-const BodySection = ({ children }: { children: React.ReactNode }) => (
-  <section className="gap-tight flex flex-col">
-    <h2 className="section-label">Body</h2>
-    {children}
-  </section>
-);
-
-/**
- * Task 0005 replaces this viewer with a content-aware one. Until then it keeps
- * the original content-type dispatch, with the fetch moved out of render and
- * the PDF handed over as a locally-built blob rather than by navigating to the
- * body endpoint — captured bodies must never load as a document on this origin.
- */
-const RequestBody = ({
-  requestAddress,
-  contentType,
-}: {
-  requestAddress: string;
-  contentType: string | undefined;
-}) => {
-  const [text, setText] = useState<string>();
-  const [downloadUrl, setDownloadUrl] = useState<string>();
-
-  const isImage = contentType !== undefined && /image\//.test(contentType);
-  const isPdf =
-    contentType !== undefined && /application\/pdf/.test(contentType);
-  const isInlineText =
-    contentType !== undefined &&
-    (TEXTUAL.test(contentType) || /application\/json/.test(contentType));
-
-  useEffect(() => {
-    if (!isInlineText) return;
-    let current = true;
-
-    holeService
-      .getBody(requestAddress)
-      .then((data) => {
-        if (!current) return;
-        setText(data);
-      })
-      .catch((error) => console.error(error));
-
-    return () => {
-      current = false;
-    };
-  }, [requestAddress, isInlineText]);
-
-  useEffect(() => {
-    if (!isPdf) return;
-    let cancelled = false;
-    let objectUrl: string | undefined;
-
-    holeService
-      .getBodyBytes(requestAddress)
-      .then((bytes) => {
-        // application/octet-stream, not application/pdf: even a blob: URL the
-        // app owns should never be something a browser will render inline.
-        const url = URL.createObjectURL(
-          new Blob([bytes], { type: "application/octet-stream" }),
-        );
-        // StrictMode cleans up the first effect run before this resolves, so
-        // without this the blob would be built after cleanup and never revoked
-        // — an orphan holding the whole file for the tab's lifetime.
-        if (cancelled) {
-          URL.revokeObjectURL(url);
-          return;
-        }
-        objectUrl = url;
-        setDownloadUrl(url);
-      })
-      .catch((error) => console.error(error));
-
-    return () => {
-      cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-      setDownloadUrl(undefined);
-    };
-  }, [requestAddress, isPdf]);
-
-  if (contentType === undefined) return null;
-
-  if (isImage) {
-    return (
-      <BodySection>
-        <img
-          alt="Captured request body"
-          className="border-base-300 rounded-box max-w-full border"
-          src={`${holeService.BASE_URL}/api/request/${requestAddress}/body`}
-        />
-      </BodySection>
-    );
-  }
-
-  if (isInlineText) {
-    return (
-      <BodySection>
-        <div className="address border-base-300 bg-base-200/50 px-gutter py-snug rounded-box border break-all whitespace-pre-wrap">
-          {text}
-        </div>
-      </BodySection>
-    );
-  }
-
-  if (isPdf) {
-    return (
-      <BodySection>
-        <div>
-          <a
-            className={`btn btn-sm btn-outline btn-primary ${
-              downloadUrl ? "" : "btn-disabled"
-            }`}
-            href={downloadUrl}
-            download={`${requestAddress}.pdf`}
-          >
-            📄 Download PDF
-          </a>
-        </div>
-      </BodySection>
-    );
-  }
-
-  return null;
 };
 
 const RequestBreadcrumbs = ({
@@ -269,7 +142,14 @@ const Request = () => {
   }
 
   const detail = () => {
-    if (loadState === "loading") {
+    // The stale-record check matters on route changes: the first render after
+    // the param changes still holds the previous request's record, and
+    // rendering the body viewer then would fetch the new address's body
+    // classified under the old content-type.
+    if (
+      loadState === "loading" ||
+      (request && request.request_address !== request_address)
+    ) {
       return (
         <p className="text-body text-base-content/50" role="status">
           Loading request…

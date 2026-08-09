@@ -133,3 +133,55 @@
     @apply pb-section min-h-0 flex-1 overflow-y-auto;
   }
 }
+
+@layer components {
+  /* Syntax-highlighting theme for the body viewer (task 0005), derived from
+   * the palette above rather than a stock hljs stylesheet: violet for
+   * structure, magenta for values, the disk's inner edge for literals. Tokens
+   * come from highlight.js's json/xml/yaml/javascript grammars only. */
+
+  /* Keys, attribute names, tag names, keywords: the primary violet. */
+  .hljs-attr,
+  .hljs-attribute,
+  .hljs-name,
+  .hljs-keyword,
+  .hljs-selector-tag {
+    color: color-mix(
+      in oklab,
+      var(--color-primary) 80%,
+      var(--color-base-content)
+    );
+  }
+
+  /* String values: the secondary magenta. */
+  .hljs-string,
+  .hljs-regexp {
+    color: var(--color-secondary);
+  }
+
+  /* Numbers, booleans, null: the cool info blue, set off from strings. */
+  .hljs-number,
+  .hljs-literal,
+  .hljs-symbol {
+    color: var(--color-info);
+  }
+
+  /* Function and class names in javascript bodies. */
+  .hljs-title {
+    color: var(--color-accent);
+  }
+
+  /* Tag punctuation, YAML bullets, doctype/meta: quiet structural chrome. */
+  .hljs-tag,
+  .hljs-bullet,
+  .hljs-meta,
+  .hljs-punctuation {
+    color: color-mix(in oklab, var(--color-base-content) 60%, transparent);
+  }
+
+  /* Comments recede furthest. */
+  .hljs-comment {
+    color: color-mix(in oklab, var(--color-base-content) 45%, transparent);
+    font-style: italic;
+  }
+}
