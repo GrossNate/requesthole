@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import userEvent from "@testing-library/user-event";
+import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 import holeService from "../services";
 import Request from "./Request";
 
@@ -115,6 +116,25 @@ describe("Request body", () => {
 });
 
 describe("Request load state", () => {
+  // The pane used to be its own route, so switching requests remounted it and
+  // the header could not be stale. Inside the hole view one instance is reused
+  // across selections, and the header was showing the request you just left
+  // while the body underneath said "Loading request…".
+  it("shows nothing of the previous request while the next one loads", async () => {
+    vi.mocked(holeService.getRequest).mockResolvedValue({
+      ...captured("{}"),
+      method: "DELETE",
+      request_path: "/the-previous-one",
+      request_address: "other0",
+    });
+    renderRequest();
+
+    await screen.findByText(/loading request/i);
+
+    expect(screen.queryByText("/the-previous-one")).not.toBeInTheDocument();
+    expect(screen.queryByText("DELETE")).not.toBeInTheDocument();
+  });
+
   // On a route change the first render still holds the previous request's
   // record, so the body viewer would fire a full-body fetch for the new
   // address classified under the old content-type.
@@ -136,6 +156,38 @@ describe("Request load state", () => {
     renderRequest();
 
     expect(screen.queryByText(/no headers/i)).not.toBeInTheDocument();
+  });
+
+  // The pane keeps the record it loaded last, which is what makes a fetch that
+  // rejects mid-selection ambiguous: the state says "failed" while the record
+  // in hand says "you are looking at the previous request". Reading staleness
+  // first left the reader on "Loading request…" for good — reachable by
+  // opening a request that another tab has since deleted.
+  it("reports a failed load for a request opened after one that succeeded", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={["/view/abc123/req001"]}>
+        <Link to="/view/abc123/req002">the next one</Link>
+        <Routes>
+          <Route
+            path="/view/:hole_address/:request_address"
+            element={<Request />}
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await screen.findByRole("rowheader", { name: "user-agent" });
+
+    vi.mocked(holeService.getRequest).mockRejectedValue(new Error("gone"));
+    await user.click(screen.getByRole("link", { name: "the next one" }));
+
+    expect(
+      await screen.findByText(/couldn't load this request/i),
+    ).toBeVisible();
+    expect(screen.queryByText(/loading request/i)).not.toBeInTheDocument();
+    // And nothing of the request the reader left is still captioning it.
+    expect(screen.queryByText("/abc123")).not.toBeInTheDocument();
+    expect(screen.queryByText("POST")).not.toBeInTheDocument();
   });
 
   it("reports a failed load rather than claiming there were no headers", async () => {

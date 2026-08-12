@@ -86,10 +86,23 @@ function routesWrapper(requestBroadcaster: RequestBroadcaster) {
       (request, reply) => {
         const { hole_address } = request.params;
         requestBroadcaster.addClient(hole_address, reply);
+        // Attached before anything is written, so reclamation never depends on
+        // how much happens first. Every subscriber leaves through here.
         request.socket.on("close", () => {
           reply.sse({ event: "close" });
           requestBroadcaster.deleteClient(hole_address, reply);
         });
+        // Flushes the response headers straight away, which is what makes a
+        // browser's EventSource report the stream as open. Without it the
+        // headers wait for the first capture, and a live stream is
+        // indistinguishable from one that never connected.
+        //
+        // Named `stream-open` rather than `open`: EventSource has a built-in
+        // event of that name, and a frame naming it would be dispatched to
+        // `onopen`'s listeners the moment it carried a `data` field — a second
+        // open per connection, which queues another snapshot and arms another
+        // settle timer. Nothing here should depend on the frame staying empty.
+        reply.sse({ event: "stream-open" });
       },
     );
   };

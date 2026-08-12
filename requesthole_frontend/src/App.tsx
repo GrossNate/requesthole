@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback } from "react";
 import holeService from "./services";
 import Home from "./components/Home";
 import Hole from "./components/Hole";
-import Request from "./components/Request";
 import { type holeObject, type LoadState } from "./types";
 import { Routes, Route, Link, useNavigate } from "react-router-dom";
 import EmptyState from "./components/EmptyState";
@@ -138,9 +137,12 @@ function App() {
               />
             }
           />
+          {/* Both hole routes render the same view: the request address only
+              selects which capture the detail pane shows, so opening one never
+              unmounts the live list. */}
           <Route
             path="/view/:hole_address/:request_address"
-            element={<Request />}
+            element={<Hole />}
           />
         </Routes>
       </main>

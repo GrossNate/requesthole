@@ -189,8 +189,25 @@ describe("prettyXml", () => {
 
   // Same crash mode as JSON: recursion and quadratic indentation on deep
   // nesting must bail to raw display, never throw during render.
+  //
+  // 200 levels, not thousands: the bail is at MAX_FORMAT_DEPTH (100), so twice
+  // that proves the behaviour just as well while the cost — jsdom's DOMParser
+  // chewing through the document, which dwarfs the formatter's own work —
+  // stays in milliseconds. The 30 KB version took seconds and failed as a
+  // timeout under a loaded full-suite run, which is not this test's subject.
   it("refuses pathologically deep nesting instead of blowing up", () => {
-    const deep = "<a>".repeat(5_000) + "</a>".repeat(5_000);
+    const deep = "<a>".repeat(200) + "</a>".repeat(200);
     expect(prettyXml(deep)).toBeUndefined();
+  });
+
+  // The other half of "pathological": size without depth. A body this shape is
+  // formatted rather than refused — there is no depth to bail on — so this is
+  // the case that actually walks 30 KB of document, and it is cheap because
+  // the walk is shallow.
+  it("formats a large flat document without blowing up", () => {
+    const wide = `<r>${"<a>x</a>".repeat(5_000)}</r>`;
+    const formatted = prettyXml(wide);
+    expect(formatted).toContain("<a>x</a>");
+    expect(formatted?.split("\n")).toHaveLength(5_002);
   });
 });

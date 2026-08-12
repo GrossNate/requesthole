@@ -4,6 +4,7 @@
   width="192" />
 
 # RequestHole
+
 A place to capture, store, and examine your HTTP requests.
 
 ## Deployment
@@ -121,29 +122,29 @@ does it as the first half of its build:
 
 ## Configuration
 
-| Variable | Used by | Default | Purpose |
-|:---|:---|:---|:---|
-| `DATABASE_PATH` | backend | none — required | Path to the SQLite file. Compose sets it to `/data/requesthole.db`; the dev script sets it to `./data/requesthole.db`. |
-| `WEB_PORT` | Compose, smoke test | `8080` | Host port that the `nginx` service publishes. |
+| Variable        | Used by             | Default         | Purpose                                                                                                                |
+| :-------------- | :------------------ | :-------------- | :--------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_PATH` | backend             | none — required | Path to the SQLite file. Compose sets it to `/data/requesthole.db`; the dev script sets it to `./data/requesthole.db`. |
+| `WEB_PORT`      | Compose, smoke test | `8080`          | Host port that the `nginx` service publishes.                                                                          |
 
 ## Route design
 
-| UI | route | purpose |
-|:----|:-------|:---------|
-GET | `/`     | main - view all holes
-GET | `/view/:hole_address` | view list of requests in a hole
-GET | `/view/:hole_address/:request_address` | view details of a request
-&nbsp;||
-**API** | | 
-GET | `/api/` | list API reference? (not implemented)
-GET | `/api/holes` | get all holes info
-GET | `/api/hole/:hole_address` | get hole info
-POST | `/api/hole` | create a new hole
-DELETE | `/api/hole/:hole_address` | delete a hole
-GET | `/api/hole/:hole_address/requests` | get all requests for a hole
-GET | `/api/hole/:hole_address/events` | SSE stream of requests as they arrive
-GET | `/api/request/:request_address` | get specific request
-GET | `/api/request/:request_address/body` | get a request's raw body
-DELETE | `/api/request/:request_address` | delete specific request
-&nbsp; | | 
-\* | `/:hole_address` | hole endpoint to ingest HTTP requests
+| UI      | route                                  | purpose                                               |
+| :------ | :------------------------------------- | :---------------------------------------------------- |
+| GET     | `/`                                    | main - view all holes                                 |
+| GET     | `/view/:hole_address`                  | view list of requests in a hole                       |
+| GET     | `/view/:hole_address/:request_address` | the same list, with one request's detail alongside it |
+| &nbsp;  |                                        |
+| **API** |                                        |
+| GET     | `/api/`                                | list API reference? (not implemented)                 |
+| GET     | `/api/holes`                           | get all holes info                                    |
+| GET     | `/api/hole/:hole_address`              | get hole info                                         |
+| POST    | `/api/hole`                            | create a new hole                                     |
+| DELETE  | `/api/hole/:hole_address`              | delete a hole                                         |
+| GET     | `/api/hole/:hole_address/requests`     | get all requests for a hole                           |
+| GET     | `/api/hole/:hole_address/events`       | SSE stream of requests as they arrive                 |
+| GET     | `/api/request/:request_address`        | get specific request                                  |
+| GET     | `/api/request/:request_address/body`   | get a request's raw body                              |
+| DELETE  | `/api/request/:request_address`        | delete specific request                               |
+| &nbsp;  |                                        |
+| \*      | `/:hole_address`                       | hole endpoint to ingest HTTP requests                 |
