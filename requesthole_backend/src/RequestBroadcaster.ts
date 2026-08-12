@@ -16,7 +16,13 @@ class RequestBroadcaster {
   }
 
   deleteClient(holeAddress: string, reply: FastifyReply) {
-    this.holes.get(holeAddress)?.delete(reply);
+    const subscribers = this.holes.get(holeAddress);
+    if (!subscribers) return;
+    subscribers.delete(reply);
+    // Drop the key with the last subscriber. A stream can be opened for any
+    // six characters, real hole or not, so leaving emptied Sets behind meant
+    // one permanent Map entry per address anyone ever probed.
+    if (subscribers.size === 0) this.holes.delete(holeAddress);
   }
 
   broadcastRequest(holeAddress: string, request: RequestSansBody) {

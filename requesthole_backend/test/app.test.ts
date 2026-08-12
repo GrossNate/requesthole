@@ -111,9 +111,10 @@ describe("request capture", () => {
       method: "GET",
       url: `/api/hole/${address}/requests`,
     });
-    const rows = listed.json<
-      { method: string; request_path: string; query_params: string }[]
-    >();
+    const rows =
+      listed.json<
+        { method: string; request_path: string; query_params: string }[]
+      >();
     expect(rows).toHaveLength(1);
     expect(rows[0]?.method).toBe("POST");
     expect(JSON.parse(rows[0]!.query_params)).toEqual({ probe: "1" });
@@ -144,6 +145,61 @@ describe("request capture", () => {
 
     await sseApp.close();
   });
+
+  // A browser's EventSource only reports itself open once response headers
+  // arrive. Holding them back until the first capture left a perfectly healthy
+  // stream indistinguishable from one that never connected, which is exactly
+  // what the viewer's connection indicator is there to tell apart.
+  it("opens the events stream before anything has been captured", async () => {
+    const sseApp = buildApp({ databasePath: ":memory:" });
+    try {
+      await sseApp.listen({ port: 0, host: "127.0.0.1" });
+      const serverAddress = sseApp.server.address();
+      const port =
+        typeof serverAddress === "object" && serverAddress
+          ? serverAddress.port
+          : 0;
+      const holeAddress = await createHole(sseApp);
+
+      const opened = await new Promise<{ status: number; body: string }>(
+        (resolve, reject) => {
+          const req = http.get(
+            {
+              host: "127.0.0.1",
+              port,
+              path: `/api/hole/${holeAddress}/events`,
+            },
+            (res) => {
+              res.setEncoding("utf8");
+              let buffer = "";
+              res.on("data", (chunk: string) => {
+                buffer += chunk;
+                if (!buffer.includes("event:")) return;
+                req.destroy();
+                resolve({ status: res.statusCode ?? 0, body: buffer });
+              });
+            },
+          );
+          req.on("error", reject);
+          setTimeout(() => {
+            req.destroy();
+            reject(
+              new Error("the stream sent nothing before the first capture"),
+            );
+          }, 3000).unref();
+        },
+      );
+
+      expect(opened.status).toBe(200);
+      // Not `open`: that is EventSource's own built-in event type, and this
+      // frame exists only to flush headers. The name keeps it clear of the
+      // client's `onopen` even if it ever grows a `data` field.
+      expect(opened.body).toContain("event: stream-open");
+      expect(opened.body).not.toContain("data:");
+    } finally {
+      await sseApp.close();
+    }
+  }, 10000);
 
   it("delivers a captured request over the live SSE events stream", async () => {
     const sseApp = buildApp({ databasePath: ":memory:" });

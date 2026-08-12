@@ -122,6 +122,13 @@
     @apply text-heading text-base-content font-semibold;
   }
 
+  /* The heading of a pane inside a route — the request detail beside the list.
+   * A step down from `.page-title`, so the page still has one loudest heading
+   * when both are on screen at once. */
+  .pane-title {
+    @apply text-title text-base-content font-semibold;
+  }
+
   /* Small uppercase label above a group — table captions, field names. */
   .section-label {
     @apply text-caption text-base-content/50 font-semibold tracking-widest uppercase;

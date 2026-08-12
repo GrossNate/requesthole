@@ -75,6 +75,27 @@ pattern, and all get rows in the README's Configuration table:
 
 ## AFK tasks
 
+> **Already done in 0006, do not re-litigate:** `RequestBroadcaster` drops a hole's key when its
+> last subscriber leaves. A stream can be opened for any six characters, so the emptied `Set`s it
+> used to keep were one permanent Map entry per address anyone ever probed. Also investigated and
+> found to be a non-issue: a socket destroyed before the events route attaches its `close` listener
+> would leak a subscriber, but Fastify routes from inside the socket's own data handler, so the
+> listener is always attached first — measured over 1000 connect-and-reset cycles, zero misses. No
+> guard was added, since an unreachable branch cannot be tested and would be dead code. The caps,
+> limiter, TTL and body limit below are still this task's.
+>
+> **Handed over from 0006's round-5 review:** the SSE stream carries captures but not deletions, so
+> a request deleted in one tab can linger in another until that tab's next snapshot — and a stream
+> that never drops never takes one. A delete frame on the stream is the fix; it is server-side work
+> and it sits with the rest of this task's stream changes. Insert-time trimming and the TTL sweep
+> below delete rows behind the client's back too, which makes it the same problem at a larger
+> scale: those evictions want the same frame.
+
+- [ ] Broadcast a delete frame on the SSE stream when a request goes away — a user delete, an
+      insert-time eviction, or a TTL sweep — and drop the row on the client when it arrives. Test
+      that a viewer watching a hole loses the row without waiting for a snapshot. (Rationale in the
+      note above: today only a snapshot can notice a deletion, and a stream that never drops never
+      takes one.)
 - [ ] Add an index on `requests(hole_id)` in the schema initializer.
 - [ ] Implement the insert-time per-hole trim in the collect path, in the same transaction as the
       capture insert. Test that the (cap + 1)th capture evicts the oldest and that the count stays at

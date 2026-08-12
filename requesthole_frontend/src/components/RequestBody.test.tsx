@@ -235,10 +235,16 @@ describe("form-encoded bodies", () => {
     vi.mocked(holeService.getBodyBytes).mockResolvedValue(toBytes(pairs));
     const { container } = renderBody("application/x-www-form-urlencoded");
 
-    await screen.findByRole("rowheader", { name: "k0" });
-    expect(container.querySelectorAll("tbody tr")).toHaveLength(
-      MAX_RENDERED_ROWS,
+    // Waited for by counting rows rather than by `findByRole(…, { name })`:
+    // an accessible-name query computes a name for every element in a table
+    // this size, which took longer than the whole render and pushed the test
+    // past vitest's default timeout on a loaded machine.
+    await waitFor(() =>
+      expect(container.querySelectorAll("tbody tr")).toHaveLength(
+        MAX_RENDERED_ROWS,
+      ),
     );
+    expect(container.querySelector("tbody th")).toHaveTextContent("k0");
     expect(screen.queryByText(/more pairs not shown/i)).not.toBeInTheDocument();
   });
 });
