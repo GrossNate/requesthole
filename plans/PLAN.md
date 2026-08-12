@@ -60,6 +60,6 @@ Durable decisions that apply across all tasks.
 - [x] 0003 · Rewrite README install/deploy for Docker Compose (after 0001) → tasks/done/0003-readme-docker-install.md
 - [x] 0004 · Design system and UI defect fixes → tasks/done/0004-design-system.md
 - [x] 0005 · Content-aware request body viewer (after 0004) → tasks/done/0005-body-viewer.md
-- [~] 0006 · List/detail layout and durable live streaming (after 0005) → tasks/0006-list-detail-layout.md
+- [x] 0006 · List/detail layout and durable live streaming (after 0005) → tasks/done/0006-list-detail-layout.md
 - [ ] 0007 · Resource bounds, abuse control, and sub-path capture (after 0006) → tasks/0007-bounds-and-subpaths.md
 - [ ] 0008 · General review of the finished application (after 0007) → tasks/0008-general-review.md

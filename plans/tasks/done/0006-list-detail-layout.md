@@ -412,3 +412,22 @@ changing.
 `loadRequests` (minor), the redundant `!mounted.current` early return in the snapshot `catch`,
 `streamedSince` still accumulating on a stream that never re-opens, `mergeRequests` left variadic
 with one caller, this branch carrying 0005's post-merge bookkeeping, and the `[verify]` step.
+
+### Rounds 8 and 9, and the close-out
+
+Two more review rounds ran after the log above. Round 8 found 31, two of them majors, both the same
+class every round since 5 has led with — a guard shipped with no test. Both were fixed: the
+keyed-remount test now holds the second hole's snapshot in flight rather than resolving it empty (it
+could not fail before, because a resolved snapshot cleared the stale rows with or without the key),
+and `mergeRequests`' dedup gained the test it never had. Round 9 mutation-verified both hold, found
+15 more, and its only major was about the record rather than the code: this log stopped at round 7.
+
+The 44 findings those rounds left open are not lost — `reviews/list-detail-layout-review.md` carries
+them all with their evidence, and PR #6's description lists the ones worth acting on. The two most
+worth a look are `onopen` in `useHoleStream` missing the `source !== mine || stopped` guard that
+`onerror` got in round 7, and the delete button's untested `stopPropagation()`.
+
+**Closed out at `[x]` with the `[verify]` step still open** — a deliberate call, not an oversight.
+The code merged in PR #6 (2026-08-12); interaction feel and the mobile layout on a real device were
+never checked, and the acceptance criterion that waits on them stays unchecked above. Task 0007 was
+unblocked on the strength of the merge rather than the verification.
