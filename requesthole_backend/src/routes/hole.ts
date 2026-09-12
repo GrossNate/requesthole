@@ -4,6 +4,7 @@ import generateAddress from "../utils/address-generator";
 import insertWithUniqueAddress from "../utils/unique-insert";
 import RequestBroadcaster from "../RequestBroadcaster";
 import { HoleParams } from "../schemas";
+import { Config } from "../config";
 
 const params: JSONSchemaType<HoleParams> = {
   type: "object",
@@ -13,7 +14,10 @@ const params: JSONSchemaType<HoleParams> = {
   required: ["hole_address"],
 };
 
-function routesWrapper(requestBroadcaster: RequestBroadcaster) {
+function routesWrapper(
+  requestBroadcaster: RequestBroadcaster,
+  config: Pick<Config, "holeCreateRateLimit" | "maxHoles">,
+) {
   return function routes(
     fastify: FastifyInstance,
     options: RouteShorthandOptions,
@@ -26,6 +30,7 @@ function routesWrapper(requestBroadcaster: RequestBroadcaster) {
     const insertHole = fastify.db.prepare(
       "INSERT INTO holes (hole_address) VALUES (?) RETURNING created, hole_address;",
     );
+    const countHoles = fastify.db.prepare("SELECT COUNT(*) AS n FROM holes;");
     const deleteHole = fastify.db.prepare(
       "DELETE FROM holes WHERE hole_address = ?;",
     );
@@ -54,13 +59,32 @@ function routesWrapper(requestBroadcaster: RequestBroadcaster) {
       },
     );
 
-    fastify.post("/api/hole", options, async (_, reply) => {
-      const row = insertWithUniqueAddress(generateAddress, (address) =>
-        insertHole.get(address),
-      );
-      reply.code(201);
-      reply.send([row]);
-    });
+    fastify.post(
+      "/api/hole",
+      {
+        ...options,
+        config: {
+          rateLimit: { max: config.holeCreateRateLimit, timeWindow: "1 hour" },
+        },
+      },
+      async (_, reply) => {
+        // At the ceiling the failure lands on whoever is creating, never on an
+        // existing hole: nothing is evicted to make room. Bare status, like
+        // every other error in this API. Read-then-insert is safe here
+        // because better-sqlite3 is synchronous on one connection, so no
+        // other creation can interleave between the count and the insert.
+        const { n } = countHoles.get() as { n: number };
+        if (n >= config.maxHoles) {
+          reply.code(503);
+          return;
+        }
+        const row = insertWithUniqueAddress(generateAddress, (address) =>
+          insertHole.get(address),
+        );
+        reply.code(201);
+        reply.send([row]);
+      },
+    );
 
     fastify.delete<{ Params: HoleParams }>(
       "/api/hole/:hole_address",

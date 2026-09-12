@@ -1,9 +1,17 @@
-import { FastifyInstance, RouteShorthandOptions } from "fastify";
+import {
+  FastifyInstance,
+  RawReplyDefaultExpression,
+  RawRequestDefaultExpression,
+  RawServerDefault,
+  RouteHandlerMethod,
+  RouteShorthandOptions,
+} from "fastify";
 import { JSONSchemaType } from "ajv";
 import generateAddress from "../utils/address-generator";
 import insertWithUniqueAddress from "../utils/unique-insert";
 import RequestBroadcaster from "../RequestBroadcaster";
 import RequestSansBody from "../schemas";
+import { Config } from "../config";
 
 interface HoleParams {
   hole_address: string;
@@ -17,7 +25,10 @@ const params: JSONSchemaType<HoleParams> = {
   required: ["hole_address"],
 };
 
-function routesWrapper(requestBroadcaster: RequestBroadcaster) {
+function routesWrapper(
+  requestBroadcaster: RequestBroadcaster,
+  config: Pick<Config, "maxRequestsPerHole" | "captureRateLimit">,
+) {
   return function routes(
     fastify: FastifyInstance,
     options: RouteShorthandOptions,
@@ -43,6 +54,31 @@ function routesWrapper(requestBroadcaster: RequestBroadcaster) {
             headers, body)
         VALUES (?, ?, ?, ?, ?, ?, ?)`,
     );
+    // Trims the hole back to its cap right after every capture, in the same
+    // transaction as the insert, so the table is bounded continuously rather
+    // than between sweeps. Oldest first by insertion order; the millisecond
+    // `created` default can tie, so the primary key breaks the tie.
+    const trimHole = fastify.db.prepare(
+      `
+        DELETE FROM requests
+        WHERE request_id IN (
+          SELECT request_id FROM requests
+          WHERE hole_id = ?
+          ORDER BY created DESC, request_id DESC
+          LIMIT -1 OFFSET ?
+        )
+        RETURNING request_address`,
+    );
+    const captureAndTrim = fastify.db.transaction(
+      (holeId: number, address: string, ...values: unknown[]) => {
+        insertRequest.run(holeId, address, ...values);
+        return (
+          trimHole.all(holeId, config.maxRequestsPerHole) as {
+            request_address: string;
+          }[]
+        ).map((row) => row.request_address);
+      },
+    );
     const selectCapturedRequest = fastify.db.prepare(
       `
         SELECT
@@ -57,44 +93,70 @@ function routesWrapper(requestBroadcaster: RequestBroadcaster) {
       `,
     );
 
-    fastify.all<{ Params: HoleParams }>(
-      "/:hole_address",
-      { ...options, schema: { params } },
-      async (request, reply) => {
-        fastify.log.info("called collection route");
-        const { hole_address } = request.params;
-        const hole = selectHoleId.get(hole_address) as
-          | { hole_id: number }
-          | undefined;
-        if (!hole) {
-          reply.code(404);
+    const collect: RouteHandlerMethod<
+      RawServerDefault,
+      RawRequestDefaultExpression,
+      RawReplyDefaultExpression,
+      { Params: HoleParams }
+    > = async (request, reply) => {
+      fastify.log.info("called collection route");
+      const { hole_address } = request.params;
+      const hole = selectHoleId.get(hole_address) as
+        | { hole_id: number }
+        | undefined;
+      if (!hole) {
+        reply.code(404);
+      } else {
+        let evicted: string[] = [];
+        const newRequestAddress = insertWithUniqueAddress(
+          generateAddress,
+          (address) => {
+            evicted = captureAndTrim(
+              hole.hole_id,
+              address,
+              request.method,
+              // The full URL as sent, sub-path and query string included.
+              request.url,
+              JSON.stringify(request.query),
+              JSON.stringify(request.headers),
+              (request.body as Buffer | undefined) ?? null,
+            );
+            return address;
+          },
+        );
+        const row = selectCapturedRequest.get(newRequestAddress);
+        const parseResult = RequestSansBody.safeParse(row);
+        if (!parseResult.success) {
+          fastify.log.error(parseResult.error);
         } else {
-          const newRequestAddress = insertWithUniqueAddress(
-            generateAddress,
-            (address) => {
-              insertRequest.run(
-                hole.hole_id,
-                address,
-                request.method,
-                request.url,
-                JSON.stringify(request.query),
-                JSON.stringify(request.headers),
-                (request.body as Buffer | undefined) ?? null,
-              );
-              return address;
-            },
-          );
-          const row = selectCapturedRequest.get(newRequestAddress);
-          const parseResult = RequestSansBody.safeParse(row);
-          if (!parseResult.success) {
-            fastify.log.error(parseResult.error);
-          } else {
-            requestBroadcaster.broadcastRequest(hole_address, parseResult.data);
-          }
-          reply.code(200);
+          requestBroadcaster.broadcastRequest(hole_address, parseResult.data);
         }
-      },
-    );
+        // Evictions are announced after the capture that caused them, so a
+        // viewer sees the new row arrive before the oldest one goes.
+        for (const address of evicted) {
+          requestBroadcaster.broadcastDelete(hole_address, address);
+        }
+        reply.code(200);
+      }
+    };
+
+    // The bare address and anything beneath it: webhook configs get pasted
+    // with sub-paths (`/abc123/webhook`), and those must land in the same
+    // hole. `/api/*` routes are static and so win over the parametric
+    // wildcard in Fastify's router.
+    for (const url of ["/:hole_address", "/:hole_address/*"]) {
+      fastify.all<{ Params: HoleParams }>(
+        url,
+        {
+          ...options,
+          schema: { params },
+          config: {
+            rateLimit: { max: config.captureRateLimit, timeWindow: "1 minute" },
+          },
+        },
+        collect,
+      );
+    }
   };
 }
 

@@ -7,6 +7,7 @@
 #   * POST /api/hole            -> 201, returns a fixed 6-char hole_address
 #   * GET  /api/holes           -> includes the new address
 #   * POST /:address  (collect) -> 200
+#   * POST /:address/sub/path  -> 200, stored with its full path
 #   * GET  /                    -> serves the SPA index.html
 #   * a hashed static asset      -> loads with 200
 #   * GET /api/hole/:addr/events -> streams a `data:` SSE event on capture
@@ -106,6 +107,26 @@ if [ -n "$addr" ]; then
   fi
 else
   fail "collect capture — skipped, no address"
+fi
+
+# 3b) Collect capture at a sub-path -> 200, and the full path is what was stored.
+#     Guards the nginx regex: before it allowed sub-paths, this hit the SPA
+#     fallback and returned index.html with a 200, capturing nothing.
+if [ -n "$addr" ]; then
+  sub_code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "${BASE}/${addr}/webhook/v1?smoke=1" \
+    -H 'Content-Type: application/json' --data '{"smoke":true}')
+  if [ "$sub_code" = "200" ]; then
+    pass "POST /${addr}/webhook/v1 (sub-path collect) -> 200"
+  else
+    fail "POST /${addr}/webhook/v1 (sub-path collect) -> ${sub_code}"
+  fi
+  if curl -s "${BASE}/api/hole/${addr}/requests" | grep -q "/${addr}/webhook/v1?smoke=1"; then
+    pass "sub-path capture stored with its full path"
+  else
+    fail "sub-path capture not found in GET /api/hole/${addr}/requests"
+  fi
+else
+  fail "sub-path collect capture — skipped, no address"
 fi
 
 # 4) Root serves the SPA index.html.

@@ -73,6 +73,23 @@ describe("Home", () => {
     expect(createHole).toHaveBeenCalledOnce();
   });
 
+  // There are no accounts: every hole is listed for everyone, and anyone who
+  // knows an address can read what was sent to it. The page has to say so.
+  it("warns that holes are public before anyone points a secret at one", () => {
+    renderHome([{ hole_address: "abc123" }]);
+
+    const notice = screen.getByRole("note");
+    expect(notice).toBeVisible();
+    expect(notice).toHaveTextContent(/anyone can read/i);
+    expect(notice).toHaveTextContent(/credentials/i);
+  });
+
+  it("carries the notice while the list is still loading", () => {
+    renderHome([], "loading");
+
+    expect(screen.getByRole("note")).toBeVisible();
+  });
+
   it("gives the hole list a real column header", () => {
     renderHome([{ hole_address: "abc123" }]);
 

@@ -30,6 +30,21 @@ class RequestBroadcaster {
       reply.sse({ data: JSON.stringify(request) });
     });
   }
+
+  /**
+   * Tells a hole's viewers a request is gone — a user delete, an insert-time
+   * eviction, or the retention sweep. A named event: the default channel is
+   * for rows to render, and a client only ever learns of a deletion this way
+   * (a stream that never drops never takes a fresh snapshot).
+   */
+  broadcastDelete(holeAddress: string, requestAddress: string) {
+    this.holes.get(holeAddress)?.forEach((reply) => {
+      reply.sse({
+        event: "delete",
+        data: JSON.stringify({ request_address: requestAddress }),
+      });
+    });
+  }
 }
 
 export default RequestBroadcaster;

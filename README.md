@@ -41,8 +41,10 @@ That builds two services:
 
 - **`nginx`** — the Vite frontend, built to static assets and served by Nginx
   from the same image. This is the only published port. It also reverse-proxies
-  `/api/*` and the six-character collect addresses (`^/[a-zA-Z0-9]{6}$`) to the
-  backend, so the whole app lives on one origin.
+  `/api/*` and the six-character collect addresses, with any sub-path beneath
+  them (`^/[a-zA-Z0-9]{6}(/.*)?$`), to the backend, so the whole app lives on
+  one origin. The built `/assets/` directory is matched first, so a hashed
+  asset name that happens to look like an address is never proxied.
 - **`backend`** — Fastify, reachable only inside the Compose network at
   `backend:3000`. It stores everything in SQLite at `/data/requesthole.db` on
   the `data` volume, and creates its own tables on startup — there is no
@@ -53,8 +55,9 @@ That builds two services:
 Captured data lives in that `data` volume and survives `docker compose down`.
 Run `docker compose down -v` when you want to throw it away.
 
-To exercise a deployment end to end — hole creation, request capture, the SSE
-stream, the SPA fallback, and persistence across a restart:
+To exercise a deployment end to end — hole creation, request capture at the
+bare address and at a sub-path, the SSE stream, the SPA fallback, and
+persistence across a restart:
 
 ```sh
 bash scripts/smoke-test.sh
@@ -122,29 +125,47 @@ does it as the first half of its build:
 
 ## Configuration
 
-| Variable        | Used by             | Default         | Purpose                                                                                                                |
-| :-------------- | :------------------ | :-------------- | :--------------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_PATH` | backend             | none — required | Path to the SQLite file. Compose sets it to `/data/requesthole.db`; the dev script sets it to `./data/requesthole.db`. |
-| `WEB_PORT`      | Compose, smoke test | `8080`          | Host port that the `nginx` service publishes.                                                                          |
+| Variable                 | Used by             | Default         | Purpose                                                                                                                 |
+| :----------------------- | :------------------ | :-------------- | :---------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_PATH`          | backend             | none — required | Path to the SQLite file. Compose sets it to `/data/requesthole.db`; the dev script sets it to `./data/requesthole.db`.  |
+| `WEB_PORT`               | Compose, smoke test | `8080`          | Host port that the `nginx` service publishes.                                                                           |
+| `RETENTION_DAYS`         | backend             | `7`             | Holes older than this are deleted by an hourly sweep, along with their requests.                                        |
+| `MAX_REQUESTS_PER_HOLE`  | backend             | `100`           | Requests kept per hole. Each capture beyond the cap evicts that hole's oldest request.                                  |
+| `HOLE_CREATE_RATE_LIMIT` | backend             | `10`            | Hole creations allowed per client IP per hour; further ones get `429`.                                                  |
+| `CAPTURE_RATE_LIMIT`     | backend             | `60`            | Captures allowed per client IP per minute; further ones get `429`.                                                      |
+| `MAX_HOLES`              | backend             | `1000`          | Total holes the deployment will hold. At the ceiling, creation is refused with `503` — nothing is evicted to make room. |
+| `MAX_BODY_BYTES`         | backend             | `1048576`       | Largest request body a hole will capture; anything bigger is rejected with `413`.                                       |
+
+The backend knobs are all optional and apply to the running container: set them
+under the `backend` service's `environment` in `compose.yml`, or pass them
+through your shell. Each must be a positive integer; the backend refuses to
+start on anything else. Rate limits key on the client address that Nginx
+forwards in `X-Forwarded-For`, so one busy client cannot lock everyone else out.
+
+This is a public, use-at-your-own-risk deployment model: there are no accounts,
+every hole is listed on the home page, and anyone who knows an address can read
+what was sent to it. The limits above bound what a stranger can consume; they
+do not add access control.
 
 ## Route design
 
-| UI      | route                                  | purpose                                               |
-| :------ | :------------------------------------- | :---------------------------------------------------- |
-| GET     | `/`                                    | main - view all holes                                 |
-| GET     | `/view/:hole_address`                  | view list of requests in a hole                       |
-| GET     | `/view/:hole_address/:request_address` | the same list, with one request's detail alongside it |
+| UI      | route                                  | purpose                                                     |
+| :------ | :------------------------------------- | :---------------------------------------------------------- |
+| GET     | `/`                                    | main - view all holes                                       |
+| GET     | `/view/:hole_address`                  | view list of requests in a hole                             |
+| GET     | `/view/:hole_address/:request_address` | the same list, with one request's detail alongside it       |
 | &nbsp;  |                                        |
 | **API** |                                        |
-| GET     | `/api/`                                | list API reference? (not implemented)                 |
-| GET     | `/api/holes`                           | get all holes info                                    |
-| GET     | `/api/hole/:hole_address`              | get hole info                                         |
-| POST    | `/api/hole`                            | create a new hole                                     |
-| DELETE  | `/api/hole/:hole_address`              | delete a hole                                         |
-| GET     | `/api/hole/:hole_address/requests`     | get all requests for a hole                           |
-| GET     | `/api/hole/:hole_address/events`       | SSE stream of requests as they arrive                 |
-| GET     | `/api/request/:request_address`        | get specific request                                  |
-| GET     | `/api/request/:request_address/body`   | get a request's raw body                              |
-| DELETE  | `/api/request/:request_address`        | delete specific request                               |
+| GET     | `/api/`                                | list API reference? (not implemented)                       |
+| GET     | `/api/holes`                           | get all holes info                                          |
+| GET     | `/api/hole/:hole_address`              | get hole info                                               |
+| POST    | `/api/hole`                            | create a new hole                                           |
+| DELETE  | `/api/hole/:hole_address`              | delete a hole                                               |
+| GET     | `/api/hole/:hole_address/requests`     | get all requests for a hole                                 |
+| GET     | `/api/hole/:hole_address/events`       | SSE stream of requests as they arrive                       |
+| GET     | `/api/request/:request_address`        | get specific request                                        |
+| GET     | `/api/request/:request_address/body`   | get a request's raw body                                    |
+| DELETE  | `/api/request/:request_address`        | delete specific request                                     |
 | &nbsp;  |                                        |
-| \*      | `/:hole_address`                       | hole endpoint to ingest HTTP requests                 |
+| \*      | `/:hole_address`                       | hole endpoint to ingest HTTP requests                       |
+| \*      | `/:hole_address/*`                     | the same hole; the full sub-path is stored with the request |

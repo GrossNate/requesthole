@@ -30,6 +30,7 @@ type StubEventSource = {
   onopen: (() => void) | null;
   onmessage: ((event: MessageEvent) => void) | null;
   onerror: (() => void) | null;
+  addEventListener: () => void;
   close: () => void;
 };
 let lastEventSource: StubEventSource | null = null;
@@ -39,6 +40,7 @@ function StubEventSource(): StubEventSource {
     onopen: null,
     onmessage: null,
     onerror: null,
+    addEventListener: vi.fn(),
     close: vi.fn(),
   };
   return lastEventSource;

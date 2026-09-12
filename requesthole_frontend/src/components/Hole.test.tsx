@@ -39,6 +39,12 @@ type StubEventSource = {
   onopen: (() => void) | null;
   onmessage: ((event: MessageEvent) => void) | null;
   onerror: (() => void) | null;
+  addEventListener: (
+    type: string,
+    listener: (event: MessageEvent) => void,
+  ) => void;
+  /** Named-event listeners the hook registered, by event type. */
+  listeners: Record<string, ((event: MessageEvent) => void)[]>;
   close: () => void;
 };
 const eventSourceUrls: string[] = [];
@@ -49,16 +55,28 @@ let lastEventSource: StubEventSource | null = null;
 // an object makes that construction yield the stub.
 function StubEventSource(url: string): StubEventSource {
   eventSourceUrls.push(url);
+  const listeners: StubEventSource["listeners"] = {};
   lastEventSource = {
     onopen: null,
     onmessage: null,
     onerror: null,
+    addEventListener: (type, listener) => {
+      (listeners[type] ??= []).push(listener);
+    },
+    listeners,
     close: vi.fn(),
   };
   openedSources.push(lastEventSource);
   return lastEventSource;
 }
 vi.stubGlobal("EventSource", StubEventSource);
+
+// The server's delete frame, as the hook would receive it.
+const streamDelete = (request_address: string) => {
+  for (const listener of lastEventSource!.listeners["delete"] ?? []) {
+    listener({ data: JSON.stringify({ request_address }) } as MessageEvent);
+  }
+};
 
 const capturedRequest = (
   overrides: Partial<RequestObject> = {},
@@ -1177,6 +1195,84 @@ describe("Hole snapshot reconciliation", () => {
     });
 
     expect(screen.queryByText("/doomed")).not.toBeInTheDocument();
+  });
+});
+
+// Only a snapshot could notice a deletion before, and a stream that never
+// drops never takes one — so a row deleted in another tab, evicted by the
+// hole's cap, or swept by retention stayed on screen indefinitely.
+describe("Hole stream deletes", () => {
+  it("drops a row the stream says is gone, without waiting for a snapshot", async () => {
+    const gone = capturedRequest({
+      request_address: "gone01",
+      request_path: "/gone",
+    });
+    vi.mocked(holeService.getRequests).mockResolvedValue([
+      capturedRequest(),
+      gone,
+    ]);
+    renderHole();
+    await screen.findByText("/gone");
+
+    act(() => streamDelete("gone01"));
+
+    expect(screen.queryByText("/gone")).not.toBeInTheDocument();
+    expect(screen.getByText("/abc123")).toBeVisible();
+    expect(holeService.getRequests).toHaveBeenCalledTimes(1);
+  });
+
+  it("navigates back to the list when the open request goes away", async () => {
+    vi.mocked(holeService.getRequests).mockResolvedValue([capturedRequest()]);
+    renderHoleAt("/view/abc123/req001");
+    await screen.findByRole("link", { name: "/abc123" });
+
+    act(() => streamDelete("req001"));
+
+    expect(navigateSpy).toHaveBeenCalledWith("/view/abc123", {
+      replace: true,
+    });
+  });
+
+  it("does not resurrect a stream-deleted request with an older snapshot", async () => {
+    const doomed = capturedRequest({
+      request_address: "doomed",
+      request_path: "/doomed",
+    });
+    vi.mocked(holeService.getRequests).mockResolvedValue([
+      capturedRequest(),
+      doomed,
+    ]);
+    renderHole();
+    await screen.findByText("/doomed");
+
+    let resolveStale: (requests: RequestObject[]) => void = () => {};
+    vi.mocked(holeService.getRequests).mockReturnValue(
+      new Promise((resolve) => {
+        resolveStale = resolve;
+      }),
+    );
+    await act(async () => {
+      lastEventSource!.onopen!();
+    });
+
+    act(() => streamDelete("doomed"));
+    expect(screen.queryByText("/doomed")).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveStale([capturedRequest(), doomed]);
+    });
+
+    expect(screen.queryByText("/doomed")).not.toBeInTheDocument();
+  });
+
+  it("ignores a delete for a row it never had", async () => {
+    vi.mocked(holeService.getRequests).mockResolvedValue([capturedRequest()]);
+    renderHole();
+    await screen.findByText("/abc123");
+
+    act(() => streamDelete("nosuch"));
+
+    expect(screen.getByText("/abc123")).toBeVisible();
   });
 });
 

@@ -23,9 +23,11 @@ pointers. Each task is one feature on its own branch, ending in a PR. Task bodie
 
 Durable decisions that apply across all tasks.
 
-- **Backend**: Node 24, Fastify 5, TypeScript. Routes under `/api/*`; a root-level collect route
-  `fastify.all("/:hole_address")` captures any method to a single fixed 6-char alphanumeric path
-  (bare address only, no sub-paths). SSE stream at `/api/hole/:hole_address/events`.
+- **Backend**: Node 24, Fastify 5, TypeScript. Routes under `/api/*`; root-level collect routes
+  `fastify.all("/:hole_address")` and `fastify.all("/:hole_address/*")` capture any method to a
+  fixed 6-char alphanumeric address and any sub-path beneath it (task 0007), storing the full URL
+  in `request_path`. SSE stream at `/api/hole/:hole_address/events`, carrying capture frames and
+  named `delete` frames.
 - **Frontend**: Vite + React 19 + Tailwind/daisyUI, built to static assets. Single-origin in
   production — `services.ts` sets `BASE_URL=""` for prod builds, so the app calls `/api/*` on its
   own origin. Client routes: `/`, `/view/:hole_address`, `/view/:hole_address/:request_address`.
@@ -33,9 +35,20 @@ Durable decisions that apply across all tasks.
   `nginx` (sole published port, `${WEB_PORT:-8080}:80`, serves static frontend + reverse-proxies)
   and `backend` (internal, `backend:3000`), with a `data` volume at `/data` for the SQLite file.
   Nginx routing resolves single-origin traffic: `/api/*` → backend (SSE-safe: unbuffered, HTTP/1.1,
-  long read timeout); `^/[a-zA-Z0-9]{6}$` → backend (collect capture); `/` → static + SPA fallback.
-  Host dev loop (`npm run dev`) stays non-containerized. No secrets remain — the stack has no
-  `.env.docker` or dotenvx; the backend's only config is a non-secret `DATABASE_PATH`.
+  long read timeout); `^~ /assets/` → static (declared first so hashed asset names are never
+  mistaken for addresses); `^/[a-zA-Z0-9]{6}(/.*)?$` → backend (collect capture, sub-paths
+  included); `/` → static + SPA fallback. Host dev loop (`npm run dev`) stays non-containerized.
+  No secrets remain — the stack has no `.env.docker` or dotenvx; the backend's config is
+  `DATABASE_PATH` plus the optional, non-secret bound knobs below.
+- **Resource bounds** (task 0007): public, use-at-your-own-risk threat model — no accounts, no
+  ownership, the global hole list stays; the controls bound consumption, not access. Per-hole cap
+  (`MAX_REQUESTS_PER_HOLE`, 100) trimmed at insert time in the capture transaction; hourly TTL
+  sweep (`RETENTION_DAYS`, 7) cascading to requests, timer cleared on close; `requests(hole_id)`
+  indexed. `trustProxy: true` so `@fastify/rate-limit` keys on the forwarded client IP
+  (`HOLE_CREATE_RATE_LIMIT` 10/hour, `CAPTURE_RATE_LIMIT` 60/minute); total ceiling `MAX_HOLES`
+  (1000) refuses creation with a bare 503, never evicts; `MAX_BODY_BYTES` (1 MB) → 413. Knobs are
+  read once in `src/config.ts` (override → env → default) and fail fast on non-integers. Every
+  deletion — user, eviction, sweep — is broadcast as an SSE `delete` frame.
 - **Untrusted bodies**: captured request bodies are attacker-controlled and must never execute on
   this origin. The body endpoint serves them with `x-content-type-options: nosniff` and
   `content-disposition: attachment`; the viewer fetches bytes and renders them as escaped text, never
@@ -61,5 +74,5 @@ Durable decisions that apply across all tasks.
 - [x] 0004 · Design system and UI defect fixes → tasks/done/0004-design-system.md
 - [x] 0005 · Content-aware request body viewer (after 0004) → tasks/done/0005-body-viewer.md
 - [x] 0006 · List/detail layout and durable live streaming (after 0005) → tasks/done/0006-list-detail-layout.md
-- [ ] 0007 · Resource bounds, abuse control, and sub-path capture (after 0006) → tasks/0007-bounds-and-subpaths.md
+- [~] 0007 · Resource bounds, abuse control, and sub-path capture (after 0006) → tasks/0007-bounds-and-subpaths.md
 - [ ] 0008 · General review of the finished application (after 0007) → tasks/0008-general-review.md

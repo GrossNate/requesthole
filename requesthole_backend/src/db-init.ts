@@ -19,5 +19,10 @@ export default function initSchema(db: Database.Database) {
       headers TEXT,
       body BLOB
     );
+
+    -- SQLite does not index foreign keys on its own. The insert-time trim and
+    -- the retention sweep both filter requests by hole, and the cascade on
+    -- hole delete walks this column too.
+    CREATE INDEX IF NOT EXISTS idx_requests_hole_id ON requests (hole_id);
   `);
 }

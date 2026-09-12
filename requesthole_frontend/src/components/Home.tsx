@@ -149,6 +149,18 @@ const Home: React.FC<HomeBlockProps> = ({
         {holes.length > 0 ? createButton() : null}
       </div>
 
+      <p
+        role="note"
+        className="border-warning/40 bg-warning/10 text-body text-base-content/80 px-gutter py-tight rounded-box border"
+      >
+        <span className="text-warning font-semibold">
+          Use at your own risk.
+        </span>{" "}
+        Holes are public: every hole is listed here, and anyone can read the
+        requests captured in it. Do not send real credentials, tokens, or
+        personal data to a hole.
+      </p>
+
       {listing()}
     </div>
   );

@@ -6,6 +6,14 @@ services:
     # Internal-only: reachable as http://backend:3000 on the compose network.
     environment:
       DATABASE_PATH: /data/requesthole.db
+      # Resource bounds — all optional; these are the defaults. See the
+      # README's Configuration table.
+      # RETENTION_DAYS: 7
+      # MAX_REQUESTS_PER_HOLE: 100
+      # HOLE_CREATE_RATE_LIMIT: 10
+      # CAPTURE_RATE_LIMIT: 60
+      # MAX_HOLES: 1000
+      # MAX_BODY_BYTES: 1048576
     volumes:
       # Directory volume, not a single file: SQLite WAL mode writes .db + -wal + -shm
       # sidecars that must sit together and persist.

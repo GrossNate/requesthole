@@ -315,6 +315,28 @@ const HoleView = ({
     loadRequests();
   }, [loadRequests]);
 
+  // One exit for a row, whoever took it: the reader's own delete, or the
+  // server's word that another tab, the hole's cap, or retention did. The
+  // tombstone outlives the row so no in-flight snapshot can put it back
+  // (the merge filters `streamedSince` through the same set).
+  const dropRequest = useCallback(
+    (request_address: string) => {
+      deleted.current.add(request_address);
+      // The pane is showing the record that was just deleted, and the URL
+      // points at it. Replace rather than push: Back should not return to a
+      // request that no longer exists.
+      if (request_address === selectedRef.current) {
+        navigate(`/view/${holeAddress}`, { replace: true });
+      }
+      setHoleRequests((prevRequests) =>
+        prevRequests.filter(
+          (request) => request.request_address !== request_address,
+        ),
+      );
+    },
+    [navigate, holeAddress],
+  );
+
   const connectionState = useHoleStream({
     holeAddress,
     onMessage: useCallback((data: string) => {
@@ -339,6 +361,15 @@ const HoleView = ({
         return next;
       });
     }, []),
+    onDelete: useCallback(
+      (data: string) => {
+        const { request_address } = JSON.parse(data) as {
+          request_address: string;
+        };
+        dropRequest(request_address);
+      },
+      [dropRequest],
+    ),
     // Whatever landed while nothing was subscribed is on no stream anyone was
     // reading, so a snapshot is the only way those captures ever appear.
     onOpen: loadRequests,
@@ -365,24 +396,11 @@ const HoleView = ({
           // A delete the backend refused — the request was already gone, or the
           // call failed — must not close the pane or leave a tombstone behind
           // for a row that is still there.
-          if (isDeleted) {
-            deleted.current.add(request_address);
-            // The pane is showing the record that was just deleted, and the
-            // URL points at it. Replace rather than push: Back should not
-            // return to a request that no longer exists.
-            if (request_address === selectedRef.current) {
-              navigate(`/view/${holeAddress}`, { replace: true });
-            }
-            setHoleRequests((prevRequests) =>
-              prevRequests.filter(
-                (request) => request.request_address !== request_address,
-              ),
-            );
-          }
+          if (isDeleted) dropRequest(request_address);
         })
         .catch((error) => console.error(error));
     },
-    [navigate, holeAddress],
+    [dropRequest],
   );
 
   const shared = Boolean(selectedAddress);

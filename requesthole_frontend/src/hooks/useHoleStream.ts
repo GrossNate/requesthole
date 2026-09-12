@@ -33,6 +33,12 @@ export type HoleStreamOptions = {
   holeAddress: string;
   onMessage: (data: string) => void;
   /**
+   * Called with the payload of a `delete` frame — the server's word that a
+   * request is gone, whether a user removed it, the hole's cap evicted it, or
+   * retention swept it. Its own channel, since the default one carries rows.
+   */
+  onDelete?: (data: string) => void;
+  /**
    * Called every time the stream opens. Captures that landed while nothing was
    * subscribed reach no client, so the caller re-fetches its list here — after
    * the first open as well as later ones, since the caller's own initial query
@@ -44,6 +50,7 @@ export type HoleStreamOptions = {
 export const useHoleStream = ({
   holeAddress,
   onMessage,
+  onDelete,
   onOpen,
 }: HoleStreamOptions): ConnectionState => {
   const [connectionState, setConnectionState] =
@@ -54,9 +61,11 @@ export const useHoleStream = ({
   // effect rather than during render, so a render React discards cannot leave
   // its handler behind.
   const onMessageRef = useRef(onMessage);
+  const onDeleteRef = useRef(onDelete);
   const onOpenRef = useRef(onOpen);
   useEffect(() => {
     onMessageRef.current = onMessage;
+    onDeleteRef.current = onDelete;
     onOpenRef.current = onOpen;
   });
 
@@ -98,6 +107,9 @@ export const useHoleStream = ({
         }, STABLE_MS);
       };
       mine.onmessage = (event) => onMessageRef.current(event.data);
+      mine.addEventListener("delete", (event) =>
+        onDeleteRef.current?.(event.data as string),
+      );
       mine.onerror = () => {
         // Not the connection we are on. Either this source has already been
         // dealt with — a second error from one EventSource is still one failed

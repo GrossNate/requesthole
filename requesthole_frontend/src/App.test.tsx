@@ -17,7 +17,12 @@ vi.mock("./services", () => ({
 }));
 
 function StubEventSource() {
-  return { onmessage: null, onerror: null, close: vi.fn() };
+  return {
+    onmessage: null,
+    onerror: null,
+    addEventListener: vi.fn(),
+    close: vi.fn(),
+  };
 }
 vi.stubGlobal("EventSource", StubEventSource);
 
