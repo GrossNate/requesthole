@@ -4,6 +4,7 @@ import {
   RawRequestDefaultExpression,
   RawServerDefault,
   RouteHandlerMethod,
+  onRequestHookHandler,
   RouteShorthandOptions,
 } from "fastify";
 import { JSONSchemaType } from "ajv";
@@ -17,10 +18,15 @@ interface HoleParams {
   hole_address: string;
 }
 
+// One definition for the schema below and the limiter's own check, which
+// runs before validation and so has to test the address itself.
+const ADDRESS_PATTERN = "^[a-zA-Z0-9]{6}$";
+const isAddress = (value: string) => new RegExp(ADDRESS_PATTERN).test(value);
+
 const params: JSONSchemaType<HoleParams> = {
   type: "object",
   properties: {
-    hole_address: { type: "string", pattern: "^[a-zA-Z0-9]{6}$" },
+    hole_address: { type: "string", pattern: ADDRESS_PATTERN },
   },
   required: ["hole_address"],
 };
@@ -142,47 +148,62 @@ function routesWrapper(
 
     // One limiter, built once and attached to both routes below. A per-route
     // `config.rateLimit` would give each route its own store, and so a client
-    // double the documented budget by alternating the bare address and a
-    // sub-path. Run as a preHandler, after validation, so a stray path that
-    // fails the address pattern is never metered against captures.
+    // could double the documented budget by alternating the bare address and
+    // a sub-path.
     const limitCaptures = fastify.rateLimit({
       max: config.captureRateLimit,
       timeWindow: "1 minute",
     });
 
-    // The bare address and anything beneath it: webhook configs get pasted
-    // with sub-paths (`/abc123/webhook`), and those must land in the same
-    // hole. `/api/*` routes are static and so win over the parametric
-    // wildcard in Fastify's router — but the wildcard is now the catch-all
-    // for any unknown multi-segment path, and those should read as not
-    // found, not as a malformed address.
-    for (const url of ["/:hole_address", "/:hole_address/*"]) {
-      fastify.all<{ Params: HoleParams }>(
-        url,
-        {
-          ...options,
-          schema: { params },
-          // Callback form rather than async: the route-options type accepts
-          // both, and the lint rule against promise-valued properties cannot
-          // tell. The limiter is itself a Fastify hook and wants the instance
-          // as `this`.
-          preHandler: (request, reply, done) => {
-            limitCaptures
-              .call(fastify, request, reply)
-              .then(() => done(), done);
-          },
-          errorHandler: (error, _request, reply) => {
-            if (error.validation) {
-              reply.code(404);
-              reply.send();
-              return;
-            }
-            reply.send(error);
-          },
+    // At `onRequest`, before the body is read: an over-budget client is
+    // turned away without its payload being buffered, and a body too big to
+    // parse still counts against the budget. Validation has not run yet, so
+    // a stray path that is not an address skips the limiter here instead.
+    // Callback form rather than async: the lint rule against promise-valued
+    // properties cannot tell the two apart. The limiter wants the instance as
+    // `this`.
+    const meterCapture: onRequestHookHandler<
+      RawServerDefault,
+      RawRequestDefaultExpression,
+      RawReplyDefaultExpression,
+      { Params: HoleParams }
+    > = (request, reply, done) => {
+      if (!isAddress(request.params.hole_address)) {
+        done();
+        return;
+      }
+      limitCaptures.call(fastify, request, reply).then(() => done(), done);
+    };
+
+    // The bare address: a malformed one is a bad request, as it always was.
+    fastify.all<{ Params: HoleParams }>(
+      "/:hole_address",
+      { ...options, schema: { params }, onRequest: meterCapture },
+      collect,
+    );
+
+    // Anything beneath an address: webhook configs get pasted with sub-paths
+    // (`/abc123/webhook`), and those must land in the same hole. `/api/*`
+    // routes are static and so win over this wildcard in Fastify's router,
+    // but it is now the catch-all for every unknown multi-segment path. Those
+    // are not malformed addresses, they are paths that do not exist: 404.
+    fastify.all<{ Params: HoleParams }>(
+      "/:hole_address/*",
+      {
+        ...options,
+        schema: { params },
+        onRequest: meterCapture,
+        errorHandler: (error, _request, reply) => {
+          if (error.validation) {
+            reply.code(404);
+            reply.send();
+            return;
+          }
+          reply.send(error);
         },
-        collect,
-      );
-    }
+      },
+      collect,
+    );
   };
 }
 

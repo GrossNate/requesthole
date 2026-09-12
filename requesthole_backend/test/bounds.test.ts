@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import buildApp, { AppOptions } from "../src/app";
 import RequestBroadcaster from "../src/RequestBroadcaster";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -149,6 +149,82 @@ describe("resource bounds", () => {
       expect(real.statusCode).toBe(200);
     });
 
+    // The limiter keys its window on Date.now(). Faking Date alone moves the
+    // clock without faking the timers `inject` relies on.
+    it("refills the hole-creation budget once the hour is up", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        const app = await start({ config: { holeCreateRateLimit: 1 } });
+        expect((await createFrom(app, "10.0.0.1")).statusCode).toBe(201);
+        vi.advanceTimersByTime(60 * 60 * 1000 - 1);
+        expect((await createFrom(app, "10.0.0.1")).statusCode).toBe(429);
+        vi.advanceTimersByTime(1);
+        expect((await createFrom(app, "10.0.0.1")).statusCode).toBe(201);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("refills the capture budget once the minute is up", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        const app = await start({ config: { captureRateLimit: 1 } });
+        const hole = await createHole(app);
+        const capture = () =>
+          app.inject({
+            method: "POST",
+            url: `/${hole}`,
+            headers: { "x-forwarded-for": "10.0.0.1" },
+          });
+        expect((await capture()).statusCode).toBe(200);
+        vi.advanceTimersByTime(60 * 1000 - 1);
+        expect((await capture()).statusCode).toBe(429);
+        vi.advanceTimersByTime(1);
+        expect((await capture()).statusCode).toBe(200);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("turns an over-budget capture away before reading its body", async () => {
+      const app = await start({
+        config: { captureRateLimit: 1, maxBodyBytes: 16 },
+      });
+      const hole = await createHole(app);
+      const capture = (body: string) =>
+        app.inject({
+          method: "POST",
+          url: `/${hole}`,
+          headers: {
+            "x-forwarded-for": "10.0.0.1",
+            "content-type": "text/plain",
+          },
+          body,
+        });
+      expect((await capture("ok")).statusCode).toBe(200);
+      // 429, not 413: the limiter answered before the parser saw the body.
+      expect((await capture("x".repeat(17))).statusCode).toBe(429);
+    });
+
+    it("meters oversized bodies against the capture budget", async () => {
+      const app = await start({
+        config: { captureRateLimit: 1, maxBodyBytes: 16 },
+      });
+      const hole = await createHole(app);
+      const capture = (body: string) =>
+        app.inject({
+          method: "POST",
+          url: `/${hole}`,
+          headers: {
+            "x-forwarded-for": "10.0.0.1",
+            "content-type": "text/plain",
+          },
+          body,
+        });
+      expect((await capture("x".repeat(17))).statusCode).toBe(413);
+      expect((await capture("ok")).statusCode).toBe(429);
+    });
+
     it("does not limit reading", async () => {
       const app = await start({
         config: { holeCreateRateLimit: 1, captureRateLimit: 1 },
@@ -259,6 +335,12 @@ describe("resource bounds", () => {
       expect(response.statusCode).toBe(404);
     });
 
+    it("still answers 400 for a malformed bare address", async () => {
+      const app = await start();
+      const response = await app.inject({ method: "POST", url: "/abcde" });
+      expect(response.statusCode).toBe(400);
+    });
+
     it("does not swallow /api paths", async () => {
       const app = await start();
       const response = await app.inject({ method: "GET", url: "/api/holes" });
@@ -271,8 +353,20 @@ describe("resource bounds", () => {
       const broadcaster = new RequestBroadcaster();
       const deletes = vi.spyOn(broadcaster, "broadcastDelete");
       const app = await start({ requestBroadcaster: broadcaster, config });
-      return { app, deletes };
+      return { app, broadcaster, deletes };
     };
+
+    // A subscriber as the events route registers one, minus the socket: the
+    // frames it is sent are exactly what a viewer's EventSource would receive.
+    const watch = (broadcaster: RequestBroadcaster, hole: string) => {
+      const sse = vi.fn();
+      broadcaster.addClient(hole, { sse } as unknown as FastifyReply);
+      return sse;
+    };
+    const deleteFrames = (addresses: (string | undefined)[]) =>
+      addresses.map((request_address) => [
+        { event: "delete", data: JSON.stringify({ request_address }) },
+      ]);
 
     it("broadcasts a user delete to the hole's viewers", async () => {
       const { app, deletes } = await startSpied();
@@ -306,11 +400,13 @@ describe("resource bounds", () => {
       expect(deletes).toHaveBeenCalledExactlyOnceWith(hole, evicted);
     });
 
-    it("broadcasts every request a hole delete takes with it", async () => {
-      const { app, deletes } = await startSpied();
+    it("tells a hole's viewers about every request a hole delete takes", async () => {
+      const { app, broadcaster } = await startSpied();
       const hole = await createHole(app);
       await app.inject({ method: "POST", url: `/${hole}?n=1` });
       await app.inject({ method: "POST", url: `/${hole}?n=2` });
+      // Subscribed after the captures, so only what the delete sends arrives.
+      const viewer = watch(broadcaster, hole);
       const addresses = (await listRequests(app, hole)).map(
         (r) => r.request_address,
       );
@@ -321,16 +417,16 @@ describe("resource bounds", () => {
       });
 
       expect(response.statusCode).toBe(204);
-      expect(deletes.mock.calls).toEqual(
-        addresses.map((address) => [hole, address]),
-      );
+      expect(viewer.mock.calls).toEqual(deleteFrames(addresses));
     });
 
-    it("broadcasts every request a sweep takes with its hole", async () => {
-      const { app, deletes } = await startSpied({ retentionDays: 1 });
+    it("tells a hole's viewers about every request a sweep takes", async () => {
+      const { app, broadcaster } = await startSpied({ retentionDays: 1 });
       const stale = await createHole(app);
       await app.inject({ method: "POST", url: `/${stale}?n=1` });
       await app.inject({ method: "POST", url: `/${stale}?n=2` });
+      // Subscribed after the captures, so only what the delete sends arrives.
+      const viewer = watch(broadcaster, stale);
       const addresses = (await listRequests(app, stale)).map(
         (r) => r.request_address,
       );
@@ -338,9 +434,27 @@ describe("resource bounds", () => {
 
       app.sweepExpiredHoles();
 
-      expect(deletes.mock.calls).toEqual(
-        addresses.map((address) => [stale, address]),
-      );
+      expect(viewer.mock.calls).toEqual(deleteFrames(addresses));
+    });
+
+    // The common case for a week-old hole: nobody is looking. Listing its
+    // requests only to address frames to no one was up to cap x holes rows.
+    it("does not list a swept hole's requests when nobody is watching it", async () => {
+      const { app, broadcaster, deletes } = await startSpied({
+        retentionDays: 1,
+      });
+      const watched = await createHole(app);
+      const unwatched = await createHole(app);
+      await app.inject({ method: "POST", url: `/${watched}` });
+      await app.inject({ method: "POST", url: `/${unwatched}` });
+      const viewer = watch(broadcaster, watched);
+      backdate(app, watched, 2);
+      backdate(app, unwatched, 2);
+
+      expect(app.sweepExpiredHoles()).toBe(2);
+
+      expect(viewer).toHaveBeenCalledOnce();
+      expect(deletes.mock.calls.map(([hole]) => hole)).toEqual([watched]);
     });
   });
 
@@ -437,6 +551,16 @@ describe("resource bounds", () => {
       });
       const holes = await second.inject({ method: "GET", url: "/api/holes" });
       expect(holes.json()).toEqual([]);
+    });
+
+    it("starts, and sweeps nothing, with a retention longer than the calendar", async () => {
+      const app = await start({ config: { retentionDays: 1_000_000_000 } });
+      const hole = await createHole(app);
+      backdate(app, hole, 365 * 1000);
+
+      expect(app.sweepExpiredHoles()).toBe(0);
+      const holes = await app.inject({ method: "GET", url: "/api/holes" });
+      expect(holes.json()).toEqual([{ hole_address: hole }]);
     });
 
     it("runs hourly and stops when the server closes", async () => {

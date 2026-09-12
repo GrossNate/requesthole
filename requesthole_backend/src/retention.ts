@@ -31,14 +31,19 @@ export default fp(
       options.requestBroadcaster,
       "holes.created < ?",
     );
-    const ttlMs = options.config.retentionDays * 24 * 60 * 60 * 1000;
+    // The cutoff is computed once per sweep, in SQL, and bound to both the
+    // listing and the delete so they agree on which holes are expired. SQL
+    // rather than JS dates: a retention longer than the calendar comes back
+    // NULL, which matches no hole, where `Date#toISOString` would throw.
+    const selectCutoff = fastify.db.prepare(
+      "SELECT strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?) AS cutoff",
+    );
+    const modifier = `-${options.config.retentionDays} days`;
 
     const sweepExpiredHoles = () => {
-      // One cutoff, computed here and bound to both statements inside the
-      // removal, so the listing and the delete agree on which holes are
-      // expired. `toISOString` matches the column's `%Y-%m-%dT%H:%M:%fZ`
-      // format, so the comparison is a plain string compare.
-      const cutoff = new Date(Date.now() - ttlMs).toISOString();
+      const { cutoff } = selectCutoff.get(modifier) as {
+        cutoff: string | null;
+      };
       const changes = removeOlderThan(cutoff);
       if (changes > 0) {
         fastify.log.info({ holes: changes }, "swept expired holes");

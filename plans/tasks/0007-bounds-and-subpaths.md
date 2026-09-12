@@ -32,10 +32,13 @@ hole list stays. The controls here bound resource consumption; they do not add a
 ### Abuse control
 
 - Rate limits via `@fastify/rate-limit`: hole creation and the collect path, keyed per client IP.
-- **`trustProxy: true`** on the Fastify instance. The only route to the backend is through our own
-  nginx, which already forwards `X-Forwarded-For`. Without this the limiter sees the nginx container's
-  IP for every request and lumps all users into one bucket, so the first person to hit a limit locks
-  out everybody. This needs its own test.
+- **`trustProxy: 1`** on the Fastify instance (amended in review round 1; originally `true`). The only
+  route to the backend is through our own nginx, which forwards `X-Forwarded-For`. Without proxy
+  trust the limiter sees the nginx container's IP for every request and lumps all users into one
+  bucket, so the first person to hit a limit locks out everybody. Exactly one hop, not every hop:
+  trusting every hop makes the client's own leftmost `X-Forwarded-For` entry the key, a fresh bucket
+  per request for anyone who sets the header. nginx sends `$remote_addr` alone for the same reason.
+  This needs its own test.
 - A ceiling on total holes. At the ceiling, hole creation is refused with an error status rather than
   evicting an existing hole — nobody's live hole disappears underneath them, and the failure lands on
   the abuser rather than an innocent user.
@@ -211,3 +214,32 @@ Decisions made along the way (no `[decision]` items were open):
 - `test/helpers.ts` holds `createHole`/`listRequests`/`captureRequest`/`backdate`, imported by
   both backend suites. A wire-level test reads the `event: delete` frame off a real socket.
 - Backend 71 tests, frontend 226; smoke test re-run against the rebuilt stack.
+
+**Review round 2 (2026-09-12) — all ten findings fixed on request.**
+
+- nginx `proxy_request_buffering off` on the collect location. Round 1's `client_max_body_size 0`
+  had let nginx spool an unbounded body to disk before proxying; now the body streams through and
+  the backend's 413 ends it. Smoke step 3c asserts a 2 MiB body gets the backend's JSON 413
+  (`FST_ERR_CTP_BODY_TOO_LARGE`), not nginx's HTML one, and fails if nginx logs spooling a body to a
+  temp file. Proven by re-enabling buffering: the 413 check still passed and only the spool check
+  failed, so the spool check is what guards this regression.
+- Capture limiter moved from `preHandler` to `onRequest`, before the body is read, with an inline
+  address check (one `ADDRESS_PATTERN` shared with the schema) so non-address paths stay unmetered.
+  Tests: an over-budget oversized body gets 429 not 413; an oversized body counts against the budget.
+- The validation-to-404 mapping is scoped to the `/:hole_address/*` route only; a malformed bare
+  address keeps its 400. README documents both.
+- `prepareHoleRemoval` lists requests only for holes `RequestBroadcaster.isWatched`; unwatched holes
+  cost one row each. The sweep and hole-delete tests now assert the frames a subscriber receives.
+- Retention cutoff computed once per sweep in SQL; an out-of-range retention yields NULL, which
+  matches no hole, instead of a `RangeError` from `Date#toISOString` at startup.
+- Config knobs must be safe integers on both the env and override paths.
+- Limiter tests advance a faked `Date` past each window and assert the budget refills.
+- This file's Abuse-control bullet now says `trustProxy: 1`; a dropped verb in a comment fixed.
+
+Decisions beyond the spec's letter, kept deliberately:
+
+- The sweep also runs once at startup (`onReady`), because an interval alone resets on every boot
+  and a process restarted more often than hourly would never sweep.
+- `DELETE /api/hole/:addr` broadcasts a delete frame per request it takes: a fourth deletion source
+  beyond the three the spec listed, sharing the sweep's code path, so a viewer in another tab does
+  not keep rows for a hole that is gone.

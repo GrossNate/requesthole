@@ -8,6 +8,8 @@
 #   * GET  /api/holes           -> includes the new address
 #   * POST /:address  (collect) -> 200
 #   * POST /:address/sub/path  -> 200, stored with its full path
+#   * an over-limit body         -> 413 from the backend, not from nginx,
+#                                   and never spooled to nginx's disk
 #   * GET  /                    -> serves the SPA index.html
 #   * a hashed static asset      -> loads with 200
 #   * GET /api/hole/:addr/events -> streams a `data:` SSE event on capture
@@ -127,6 +129,32 @@ if [ -n "$addr" ]; then
   fi
 else
   fail "sub-path collect capture — skipped, no address"
+fi
+
+# 3c) An over-limit body is refused by the backend, not by nginx. nginx's own
+#     413 is an HTML page; Fastify's is JSON naming FST_ERR_CTP_BODY_TOO_LARGE.
+#     Proves MAX_BODY_BYTES is the one limit in force and nginx streams the
+#     body through rather than capping or spooling it.
+if [ -n "$addr" ]; then
+  big_body=$(head -c 2097152 /dev/zero | tr '\0' 'x')
+  big_response=$(printf '%s' "$big_body" | curl -s -w '\n%{http_code}' -X POST "${BASE}/${addr}" \
+    -H 'Content-Type: text/plain' --data-binary @-)
+  big_code=$(printf '%s' "$big_response" | tail -n1)
+  if [ "$big_code" = "413" ] && printf '%s' "$big_response" | grep -q 'FST_ERR_CTP_BODY_TOO_LARGE'; then
+    pass "2 MiB body -> 413 from the backend"
+  else
+    fail "2 MiB body -> ${big_code} (expected the backend's 413)"
+  fi
+  # nginx warns whenever it spools a request body to a temp file. Any such
+  # line means buffering is back on and an upload is being written to disk
+  # before the backend can refuse it.
+  if docker compose logs nginx 2>&1 | grep -q 'buffered to a temporary file'; then
+    fail "nginx spooled a request body to disk (proxy_request_buffering is on)"
+  else
+    pass "nginx streamed the body through without spooling it to disk"
+  fi
+else
+  fail "body limit — skipped, no address"
 fi
 
 # 4) Root serves the SPA index.html.

@@ -35,7 +35,13 @@ const KNOBS: { key: keyof Config; env: string; fallback: number }[] = [
 function parsePositiveInteger(name: string, raw: string): number {
   // A strict decimal-digit match: Number() would accept "1e3", " 5", "0x10"
   // and "", none of which an operator means.
-  if (!/^\d+$/.test(raw) || Number(raw) < 1) {
+  // Safe integers only: 400 digits parse to Infinity, and anything past 2^53
+  // is no longer the number the operator typed.
+  if (
+    !/^\d+$/.test(raw) ||
+    !Number.isSafeInteger(Number(raw)) ||
+    Number(raw) < 1
+  ) {
     throw new Error(
       `${name} must be a positive integer, got ${JSON.stringify(raw)}`,
     );
@@ -54,7 +60,7 @@ export default function loadConfig(
       // Overrides get the same check as the environment: a test or embedder
       // passing 0 or a negative would otherwise reach SQL LIMIT/OFFSET and the
       // limiter unvalidated.
-      if (!Number.isInteger(override) || override < 1) {
+      if (!Number.isSafeInteger(override) || override < 1) {
         throw new Error(
           `${key} must be a positive integer, got ${String(override)}`,
         );

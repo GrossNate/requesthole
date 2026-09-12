@@ -143,8 +143,9 @@ start on anything else. Rate limits key on the client address that Nginx
 forwards in `X-Forwarded-For`, so one busy client cannot lock everyone else out.
 Nginx sends only the peer address it saw, and the backend trusts exactly that
 one hop, so a client cannot pick its own bucket by setting the header itself.
-Nginx also leaves body size to the backend: `MAX_BODY_BYTES` is the one place
-the limit lives.
+Nginx also leaves body size to the backend and streams bodies through
+unbuffered, so `MAX_BODY_BYTES` is the one place the limit lives and an
+oversized upload is cut off at the limit rather than spooled to disk first.
 
 This is a public, use-at-your-own-risk deployment model: there are no accounts,
 every hole is listed on the home page, and anyone who knows an address can read
@@ -173,3 +174,9 @@ do not add access control.
 | &nbsp;  |                                        |
 | \*      | `/:hole_address`                       | hole endpoint to ingest HTTP requests                       |
 | \*      | `/:hole_address/*`                     | the same hole; the full sub-path is stored with the request |
+
+A malformed bare address (`/abc12`) answers `400`, as it always has. An unknown
+path with more than one segment (`/api/nope/x`) answers `404`: it reaches the
+sub-path route only because nothing else matched, so it is a path that does not
+exist rather than a bad address. Neither counts against the capture rate
+limit.

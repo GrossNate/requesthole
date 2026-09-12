@@ -40,6 +40,15 @@ describe("loadConfig", () => {
     expect(loadConfig({ maxHoles: 1 }, { MAX_HOLES: "42" }).maxHoles).toBe(1);
   });
 
+  it("fails fast on a value too large to hold exactly", () => {
+    expect(() => loadConfig({}, { MAX_HOLES: "9".repeat(400) })).toThrow(
+      "MAX_HOLES",
+    );
+    expect(() =>
+      loadConfig({}, { MAX_HOLES: String(Number.MAX_SAFE_INTEGER + 1) }),
+    ).toThrow("MAX_HOLES");
+  });
+
   it.each([
     ["maxHoles", 0],
     ["maxBodyBytes", -1],

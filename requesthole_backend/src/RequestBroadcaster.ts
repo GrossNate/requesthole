@@ -25,6 +25,11 @@ class RequestBroadcaster {
     if (subscribers.size === 0) this.holes.delete(holeAddress);
   }
 
+  /** Whether anyone is subscribed to this hole's stream right now. */
+  isWatched(holeAddress: string) {
+    return this.holes.has(holeAddress);
+  }
+
   broadcastRequest(holeAddress: string, request: RequestSansBody) {
     this.holes.get(holeAddress)?.forEach((reply) => {
       reply.sse({ data: JSON.stringify(request) });
