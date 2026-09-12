@@ -10,6 +10,7 @@
 #   * POST /:address/sub/path  -> 200, stored with its full path
 #   * an over-limit body         -> 413 from the backend, not from nginx,
 #                                   and never spooled to nginx's disk
+#   * a deleted hole's requests  -> 404, not an empty list
 #   * GET  /                    -> serves the SPA index.html
 #   * a hashed static asset      -> loads with 200
 #   * GET /api/hole/:addr/events -> streams a `data:` SSE event on capture
@@ -155,6 +156,21 @@ if [ -n "$addr" ]; then
   fi
 else
   fail "body limit — skipped, no address"
+fi
+
+# 3d) A hole that is gone answers 404 for its requests, so a reconnecting
+#     viewer can tell it from an empty one.
+doomed=$(curl -s -X POST "${BASE}/api/hole" | grep -oE '"hole_address":"[A-Za-z0-9]{6}"' | cut -d'"' -f4)
+if [ -n "$doomed" ]; then
+  curl -s -o /dev/null -X DELETE "${BASE}/api/hole/${doomed}"
+  gone_code=$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/api/hole/${doomed}/requests")
+  if [ "$gone_code" = "404" ]; then
+    pass "deleted hole's requests -> 404"
+  else
+    fail "deleted hole's requests -> ${gone_code} (expected 404)"
+  fi
+else
+  fail "deleted-hole check — could not create a hole"
 fi
 
 # 4) Root serves the SPA index.html.

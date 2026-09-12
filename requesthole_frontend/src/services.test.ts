@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import axios, { type AxiosProgressEvent } from "axios";
 import holeService from "./services";
+import { HoleGoneError } from "./errors";
 
 vi.mock("axios", () => ({
   default: { get: vi.fn(), post: vi.fn(), delete: vi.fn() },
@@ -98,5 +99,26 @@ describe("address handling", () => {
 
     expect(axios.get).not.toHaveBeenCalled();
     expect(axios.delete).not.toHaveBeenCalled();
+  });
+});
+
+describe("a hole that no longer exists", () => {
+  // A deleted or swept hole answers 404 for its requests, where a hole with
+  // nothing in it answers an empty list. The view needs to tell those apart,
+  // and a generic failure would only be retried forever.
+  it("reports a 404 snapshot as the hole being gone", async () => {
+    vi.mocked(axios.get).mockRejectedValue({ response: { status: 404 } });
+
+    await expect(holeService.getRequests("abc123")).rejects.toBeInstanceOf(
+      HoleGoneError,
+    );
+  });
+
+  it("still reports any other failure as a plain failure", async () => {
+    vi.mocked(axios.get).mockRejectedValue({ response: { status: 500 } });
+
+    const failure = holeService.getRequests("abc123");
+    await expect(failure).rejects.toBeDefined();
+    await expect(failure).rejects.not.toBeInstanceOf(HoleGoneError);
   });
 });

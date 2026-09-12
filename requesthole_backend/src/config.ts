@@ -17,6 +17,12 @@ export interface Config {
   captureRateLimit: number;
   /** Total holes; creation is refused (never evicted) at the ceiling. */
   maxHoles: number;
+  /**
+   * Live holes one client may hold at once (IPv6 grouped by /64). Without it
+   * one patient address could fill the whole ceiling, since the hourly
+   * creation limit over the TTL outgrows it.
+   */
+  maxHolesPerIp: number;
   /** Request bodies above this many bytes are rejected with 413. */
   maxBodyBytes: number;
 }
@@ -29,6 +35,7 @@ const KNOBS: { key: keyof Config; env: string; fallback: number }[] = [
   { key: "holeCreateRateLimit", env: "HOLE_CREATE_RATE_LIMIT", fallback: 10 },
   { key: "captureRateLimit", env: "CAPTURE_RATE_LIMIT", fallback: 60 },
   { key: "maxHoles", env: "MAX_HOLES", fallback: 1000 },
+  { key: "maxHolesPerIp", env: "MAX_HOLES_PER_IP", fallback: 20 },
   { key: "maxBodyBytes", env: "MAX_BODY_BYTES", fallback: 1048576 },
 ];
 

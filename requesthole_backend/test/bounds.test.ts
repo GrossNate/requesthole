@@ -6,6 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import http from "node:http";
+import Database from "better-sqlite3";
 import { backdate, createHole, listRequests } from "./helpers";
 
 describe("resource bounds", () => {
@@ -97,9 +98,11 @@ describe("resource bounds", () => {
 
     it("trusts only the hop nginx wrote, so a spoofed X-Forwarded-For buys nothing", async () => {
       const app = await start({ config: { holeCreateRateLimit: 1 } });
-      // nginx appends the real peer to whatever the client sent, so the
-      // client's entry is leftmost and nginx's is rightmost. Only the
-      // rightmost may be the key, or every request could pick its own bucket.
+      // nginx replaces X-Forwarded-For with the peer address, so a chain
+      // should never reach the backend. If one ever does (a proxy in front
+      // that appends), the client's entry is leftmost and the hop we trust is
+      // rightmost. Only the rightmost may be the key, or every request could
+      // pick its own bucket.
       expect((await createFrom(app, "1.1.1.1, 9.9.9.9")).statusCode).toBe(201);
       expect((await createFrom(app, "2.2.2.2, 9.9.9.9")).statusCode).toBe(429);
       expect((await createFrom(app, "3.3.3.3, 8.8.8.8")).statusCode).toBe(201);
@@ -141,6 +144,13 @@ describe("resource bounds", () => {
       const from = { "x-forwarded-for": "10.0.0.1" };
       await app.inject({ method: "GET", url: "/api/nope/x", headers: from });
       await app.inject({ method: "GET", url: "/api/nope/y", headers: from });
+      // A malformed bare address takes the other route, and must skip too.
+      const malformed = await app.inject({
+        method: "POST",
+        url: "/abcde",
+        headers: from,
+      });
+      expect(malformed.statusCode).toBe(400);
       const real = await app.inject({
         method: "POST",
         url: `/${hole}/hook`,
@@ -269,6 +279,99 @@ describe("resource bounds", () => {
     });
   });
 
+  describe("per-client hole share", () => {
+    const createFrom = (app: FastifyInstance, ip: string) =>
+      app.inject({
+        method: "POST",
+        url: "/api/hole",
+        headers: { "x-forwarded-for": ip },
+      });
+    const generous = { holeCreateRateLimit: 100, maxHolesPerIp: 2 };
+
+    // The rate limit alone lets one address outgrow the ceiling: 10 an hour
+    // over a 7-day TTL is 1680 holes against 1000. A cap on live holes per
+    // client means filling the ceiling takes many clients, not one patient one.
+    it("refuses a client more live holes than its share, with 429", async () => {
+      const app = await start({ config: generous });
+      expect((await createFrom(app, "10.0.0.1")).statusCode).toBe(201);
+      expect((await createFrom(app, "10.0.0.1")).statusCode).toBe(201);
+      expect((await createFrom(app, "10.0.0.1")).statusCode).toBe(429);
+      expect((await createFrom(app, "10.0.0.2")).statusCode).toBe(201);
+    });
+
+    it("gives a client its share back when one of its holes goes", async () => {
+      const app = await start({ config: generous });
+      const first = (await createFrom(app, "10.0.0.1")).json<
+        { hole_address: string }[]
+      >()[0]?.hole_address;
+      await createFrom(app, "10.0.0.1");
+      await app.inject({ method: "DELETE", url: `/api/hole/${first}` });
+      expect((await createFrom(app, "10.0.0.1")).statusCode).toBe(201);
+    });
+
+    // One IPv6 subscriber holds a whole /64. Counting each address separately
+    // would hand them 2^64 shares; the rate limits group the same way.
+    it("counts an IPv6 client's whole /64 as one client", async () => {
+      const app = await start({ config: generous });
+      expect((await createFrom(app, "2001:db8::1")).statusCode).toBe(201);
+      expect((await createFrom(app, "2001:db8::2")).statusCode).toBe(201);
+      expect((await createFrom(app, "2001:db8::3")).statusCode).toBe(429);
+      expect((await createFrom(app, "2001:db8:0:1::1")).statusCode).toBe(201);
+    });
+
+    it("never tells anyone who created a hole", async () => {
+      const app = await start({ config: generous });
+      const hole = (await createFrom(app, "10.0.0.1")).json<
+        Record<string, unknown>[]
+      >()[0];
+      const address = hole?.["hole_address"] as string;
+      const bodies = [
+        JSON.stringify(hole),
+        (await app.inject({ method: "GET", url: "/api/holes" })).body,
+        (await app.inject({ method: "GET", url: `/api/hole/${address}` })).body,
+      ];
+      for (const body of bodies) expect(body).not.toContain("10.0.0.1");
+    });
+
+    it("brings a database from before the share was counted up to date", async () => {
+      const databasePath = join(
+        mkdtempSync(join(tmpdir(), "requesthole-test-")),
+        "requesthole.db",
+      );
+      // The holes table as it shipped before this task: no creator column.
+      const legacy = new Database(databasePath);
+      legacy.exec(`
+        CREATE TABLE holes (
+          hole_id INTEGER PRIMARY KEY,
+          hole_address TEXT NOT NULL UNIQUE,
+          created TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        );
+        INSERT INTO holes (hole_address) VALUES ('old001');
+      `);
+      legacy.close();
+
+      const app = await start({ databasePath, config: generous });
+      expect((await createFrom(app, "10.0.0.1")).statusCode).toBe(201);
+      expect((await createFrom(app, "10.0.0.1")).statusCode).toBe(201);
+      expect((await createFrom(app, "10.0.0.1")).statusCode).toBe(429);
+      const holes = await app.inject({ method: "GET", url: "/api/holes" });
+      expect(holes.json<{ hole_address: string }[]>()[0]).toEqual({
+        hole_address: "old001",
+      });
+    });
+  });
+
+  describe("slow uploads", () => {
+    // With nginx streaming bodies through, a client trickling bytes would hold
+    // a backend socket and a growing buffer forever: Fastify's default is no
+    // timeout at all. Node enforces this on a 30s sweep, too slow to wait out
+    // in a test, so the setting itself is what is checked.
+    it("gives the server a deadline for receiving a whole request", async () => {
+      const app = await start();
+      expect(app.server.requestTimeout).toBe(30_000);
+    });
+  });
+
   describe("body limit", () => {
     it("rejects a body over the configured limit with 413", async () => {
       const app = await start({ config: { maxBodyBytes: 16 } });
@@ -363,11 +466,6 @@ describe("resource bounds", () => {
       broadcaster.addClient(hole, { sse } as unknown as FastifyReply);
       return sse;
     };
-    const deleteFrames = (addresses: (string | undefined)[]) =>
-      addresses.map((request_address) => [
-        { event: "delete", data: JSON.stringify({ request_address }) },
-      ]);
-
     it("broadcasts a user delete to the hole's viewers", async () => {
       const { app, deletes } = await startSpied();
       const hole = await createHole(app);
@@ -400,16 +498,20 @@ describe("resource bounds", () => {
       expect(deletes).toHaveBeenCalledExactlyOnceWith(hole, evicted);
     });
 
-    it("tells a hole's viewers about every request a hole delete takes", async () => {
+    // A hole that is gone is one fact, not one per request: the viewer's
+    // whole list goes with it, and the view has to say the hole no longer
+    // exists rather than show an empty, still-Live hole.
+    const holeDeletedFrame = (hole_address: string) => [
+      { event: "hole-deleted", data: JSON.stringify({ hole_address }) },
+    ];
+
+    it("tells a hole's viewers once that a hole delete took it", async () => {
       const { app, broadcaster } = await startSpied();
       const hole = await createHole(app);
       await app.inject({ method: "POST", url: `/${hole}?n=1` });
       await app.inject({ method: "POST", url: `/${hole}?n=2` });
       // Subscribed after the captures, so only what the delete sends arrives.
       const viewer = watch(broadcaster, hole);
-      const addresses = (await listRequests(app, hole)).map(
-        (r) => r.request_address,
-      );
 
       const response = await app.inject({
         method: "DELETE",
@@ -417,44 +519,50 @@ describe("resource bounds", () => {
       });
 
       expect(response.statusCode).toBe(204);
-      expect(viewer.mock.calls).toEqual(deleteFrames(addresses));
+      expect(viewer.mock.calls).toEqual([holeDeletedFrame(hole)]);
     });
 
-    it("tells a hole's viewers about every request a sweep takes", async () => {
+    it("tells a hole's viewers once that the sweep took it", async () => {
       const { app, broadcaster } = await startSpied({ retentionDays: 1 });
       const stale = await createHole(app);
+      const fresh = await createHole(app);
       await app.inject({ method: "POST", url: `/${stale}?n=1` });
       await app.inject({ method: "POST", url: `/${stale}?n=2` });
-      // Subscribed after the captures, so only what the delete sends arrives.
-      const viewer = watch(broadcaster, stale);
-      const addresses = (await listRequests(app, stale)).map(
-        (r) => r.request_address,
-      );
+      const staleViewer = watch(broadcaster, stale);
+      const freshViewer = watch(broadcaster, fresh);
       backdate(app, stale, 2);
 
-      app.sweepExpiredHoles();
+      expect(app.sweepExpiredHoles()).toBe(1);
 
-      expect(viewer.mock.calls).toEqual(deleteFrames(addresses));
+      expect(staleViewer.mock.calls).toEqual([holeDeletedFrame(stale)]);
+      expect(freshViewer).not.toHaveBeenCalled();
     });
 
-    // The common case for a week-old hole: nobody is looking. Listing its
-    // requests only to address frames to no one was up to cap x holes rows.
-    it("does not list a swept hole's requests when nobody is watching it", async () => {
-      const { app, broadcaster, deletes } = await startSpied({
-        retentionDays: 1,
+    // A viewer that was disconnected when the frame went out reconnects and
+    // takes a snapshot. An empty list would be indistinguishable from a hole
+    // nobody has sent anything to yet.
+    it("answers 404 for the requests of a hole that no longer exists", async () => {
+      const app = await start();
+      const hole = await createHole(app);
+      await app.inject({ method: "DELETE", url: `/api/hole/${hole}` });
+
+      const listed = await app.inject({
+        method: "GET",
+        url: `/api/hole/${hole}/requests`,
       });
-      const watched = await createHole(app);
-      const unwatched = await createHole(app);
-      await app.inject({ method: "POST", url: `/${watched}` });
-      await app.inject({ method: "POST", url: `/${unwatched}` });
-      const viewer = watch(broadcaster, watched);
-      backdate(app, watched, 2);
-      backdate(app, unwatched, 2);
 
-      expect(app.sweepExpiredHoles()).toBe(2);
+      expect(listed.statusCode).toBe(404);
+    });
 
-      expect(viewer).toHaveBeenCalledOnce();
-      expect(deletes.mock.calls.map(([hole]) => hole)).toEqual([watched]);
+    it("still answers an empty list for a hole with nothing in it", async () => {
+      const app = await start();
+      const hole = await createHole(app);
+      const listed = await app.inject({
+        method: "GET",
+        url: `/api/hole/${hole}/requests`,
+      });
+      expect(listed.statusCode).toBe(200);
+      expect(listed.json()).toEqual([]);
     });
   });
 

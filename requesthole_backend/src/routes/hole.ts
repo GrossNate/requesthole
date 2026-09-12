@@ -1,4 +1,5 @@
 import { FastifyInstance, RouteShorthandOptions } from "fastify";
+import { normalizeIP } from "@fastify/rate-limit";
 import { JSONSchemaType } from "ajv";
 import generateAddress from "../utils/address-generator";
 import insertWithUniqueAddress from "../utils/unique-insert";
@@ -17,7 +18,7 @@ const params: JSONSchemaType<HoleParams> = {
 
 function routesWrapper(
   requestBroadcaster: RequestBroadcaster,
-  config: Pick<Config, "holeCreateRateLimit" | "maxHoles">,
+  config: Pick<Config, "holeCreateRateLimit" | "maxHoles" | "maxHolesPerIp">,
 ) {
   return function routes(
     fastify: FastifyInstance,
@@ -28,10 +29,18 @@ function routesWrapper(
     const selectHole = fastify.db.prepare(
       "SELECT hole_address, created FROM holes WHERE hole_address = ?;",
     );
+    const holeExists = fastify.db.prepare(
+      "SELECT 1 FROM holes WHERE hole_address = ?;",
+    );
+    // The creator is stored but deliberately left out of RETURNING: nothing
+    // any route sends back names who made a hole.
     const insertHole = fastify.db.prepare(
-      "INSERT INTO holes (hole_address) VALUES (?) RETURNING created, hole_address;",
+      "INSERT INTO holes (hole_address, creator_ip) VALUES (?, ?) RETURNING created, hole_address;",
     );
     const countHoles = fastify.db.prepare("SELECT COUNT(*) AS n FROM holes;");
+    const countHolesFrom = fastify.db.prepare(
+      "SELECT COUNT(*) AS n FROM holes WHERE creator_ip = ?;",
+    );
     const removeHole = prepareHoleRemoval(
       fastify.db,
       requestBroadcaster,
@@ -70,19 +79,29 @@ function routesWrapper(
           rateLimit: { max: config.holeCreateRateLimit, timeWindow: "1 hour" },
         },
       },
-      async (_, reply) => {
-        // At the ceiling the failure lands on whoever is creating, never on an
-        // existing hole: nothing is evicted to make room. Bare status, like
-        // every other error in this API. Read-then-insert is safe here
-        // because better-sqlite3 is synchronous on one connection, so no
-        // other creation can interleave between the count and the insert.
+      async (request, reply) => {
+        // Keyed exactly as the rate limiter keys this client: IPv4 as is,
+        // IPv6 grouped by /64, so one subscriber is one client for both.
+        const creator = normalizeIP(request.ip);
+        // A client at its share is refused before the global ceiling is
+        // even consulted: the failure lands on the one holding the most.
+        // Bare statuses, like every other error in this API. Read-then-insert
+        // is safe because better-sqlite3 is synchronous on one connection, so
+        // no other creation can interleave between the counts and the insert.
+        const mine = (countHolesFrom.get(creator) as { n: number }).n;
+        if (mine >= config.maxHolesPerIp) {
+          reply.code(429);
+          return;
+        }
+        // At the ceiling nothing is evicted to make room: no one's live hole
+        // disappears underneath them.
         const { n } = countHoles.get() as { n: number };
         if (n >= config.maxHoles) {
           reply.code(503);
           return;
         }
         const row = insertWithUniqueAddress(generateAddress, (address) =>
-          insertHole.get(address),
+          insertHole.get(address, creator),
         );
         reply.code(201);
         reply.send([row]);
@@ -103,7 +122,15 @@ function routesWrapper(
       "/api/hole/:hole_address/requests",
       { ...options, schema: { params } },
       async (request, reply) => {
-        reply.send(selectHoleRequests.all(request.params.hole_address));
+        const { hole_address } = request.params;
+        // A missing hole is not an empty one. A viewer that reconnects after
+        // its hole was swept or deleted has to be able to tell the two apart,
+        // or it shows an empty, still-Live hole that no capture can reach.
+        if (!holeExists.get(hole_address)) {
+          reply.code(404);
+          return;
+        }
+        reply.send(selectHoleRequests.all(hole_address));
       },
     );
 

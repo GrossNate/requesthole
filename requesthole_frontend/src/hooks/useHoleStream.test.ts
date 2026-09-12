@@ -125,6 +125,29 @@ describe("useHoleStream", () => {
     expect(onMessage).not.toHaveBeenCalled();
   });
 
+  it("tells the caller when the hole itself is gone", () => {
+    const onHoleDeleted = vi.fn();
+    const onDelete = vi.fn();
+    renderHook(() =>
+      useHoleStream({
+        holeAddress: "abc123",
+        onMessage: vi.fn(),
+        onDelete,
+        onHoleDeleted,
+        onOpen: vi.fn(),
+      }),
+    );
+
+    act(() => {
+      for (const listener of latest().listeners["hole-deleted"] ?? []) {
+        listener({ data: '{"hole_address":"abc123"}' } as MessageEvent);
+      }
+    });
+
+    expect(onHoleDeleted).toHaveBeenCalledOnce();
+    expect(onDelete).not.toHaveBeenCalled();
+  });
+
   // The old code closed on error and stopped there: the tail died silently and
   // the list went stale with nothing on screen to say so.
   it("reopens the stream after a failure, reporting the gap while it waits", () => {

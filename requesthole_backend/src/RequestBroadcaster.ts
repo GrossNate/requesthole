@@ -25,11 +25,6 @@ class RequestBroadcaster {
     if (subscribers.size === 0) this.holes.delete(holeAddress);
   }
 
-  /** Whether anyone is subscribed to this hole's stream right now. */
-  isWatched(holeAddress: string) {
-    return this.holes.has(holeAddress);
-  }
-
   broadcastRequest(holeAddress: string, request: RequestSansBody) {
     this.holes.get(holeAddress)?.forEach((reply) => {
       reply.sse({ data: JSON.stringify(request) });
@@ -37,8 +32,8 @@ class RequestBroadcaster {
   }
 
   /**
-   * Tells a hole's viewers a request is gone — a user delete, an insert-time
-   * eviction, or the retention sweep. A named event: the default channel is
+   * Tells a hole's viewers a request is gone — a user delete or an
+   * insert-time eviction. (A whole hole going is `broadcastHoleDeleted`.) A named event: the default channel is
    * for rows to render, and a client only ever learns of a deletion this way
    * (a stream that never drops never takes a fresh snapshot).
    */
@@ -47,6 +42,20 @@ class RequestBroadcaster {
       reply.sse({
         event: "delete",
         data: JSON.stringify({ request_address: requestAddress }),
+      });
+    });
+  }
+  /**
+   * Tells a hole's viewers the hole itself is gone — deleted, or swept by
+   * retention. One frame, not one per request: the whole list goes with it,
+   * and the view has to say so rather than show an empty hole still reading
+   * Live. Carries data because EventSource drops a frame without any.
+   */
+  broadcastHoleDeleted(holeAddress: string) {
+    this.holes.get(holeAddress)?.forEach((reply) => {
+      reply.sse({
+        event: "hole-deleted",
+        data: JSON.stringify({ hole_address: holeAddress }),
       });
     });
   }

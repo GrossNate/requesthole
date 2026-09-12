@@ -12,7 +12,9 @@ A place to capture, store, and examine your HTTP requests.
 The only prerequisite is [Docker](https://docs.docker.com/get-docker/) with
 Compose v2. You don't need Node on the host, and a default deploy needs no
 configuration at all: no secrets, no separate database to provision, and no
-Nginx to set up by hand. The published port is the only setting there is.
+Nginx to set up by hand. Beyond the published port, every setting is an
+optional resource bound with a working default; see
+[Configuration](#configuration).
 
 From the repository root:
 
@@ -125,16 +127,17 @@ does it as the first half of its build:
 
 ## Configuration
 
-| Variable                 | Used by             | Default         | Purpose                                                                                                                 |
-| :----------------------- | :------------------ | :-------------- | :---------------------------------------------------------------------------------------------------------------------- |
-| `DATABASE_PATH`          | backend             | none — required | Path to the SQLite file. Compose sets it to `/data/requesthole.db`; the dev script sets it to `./data/requesthole.db`.  |
-| `WEB_PORT`               | Compose, smoke test | `8080`          | Host port that the `nginx` service publishes.                                                                           |
-| `RETENTION_DAYS`         | backend             | `7`             | Holes older than this are deleted by an hourly sweep, along with their requests.                                        |
-| `MAX_REQUESTS_PER_HOLE`  | backend             | `100`           | Requests kept per hole. Each capture beyond the cap evicts that hole's oldest request.                                  |
-| `HOLE_CREATE_RATE_LIMIT` | backend             | `10`            | Hole creations allowed per client IP per hour; further ones get `429`.                                                  |
-| `CAPTURE_RATE_LIMIT`     | backend             | `60`            | Captures allowed per client IP per minute; further ones get `429`.                                                      |
-| `MAX_HOLES`              | backend             | `1000`          | Total holes the deployment will hold. At the ceiling, creation is refused with `503` — nothing is evicted to make room. |
-| `MAX_BODY_BYTES`         | backend             | `1048576`       | Largest request body a hole will capture; anything bigger is rejected with `413`.                                       |
+| Variable                 | Used by             | Default         | Purpose                                                                                                                                                                         |
+| :----------------------- | :------------------ | :-------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `DATABASE_PATH`          | backend             | none — required | Path to the SQLite file. Compose sets it to `/data/requesthole.db`; the dev script sets it to `./data/requesthole.db`.                                                          |
+| `WEB_PORT`               | Compose, smoke test | `8080`          | Host port that the `nginx` service publishes.                                                                                                                                   |
+| `RETENTION_DAYS`         | backend             | `7`             | Holes older than this are deleted by an hourly sweep, along with their requests.                                                                                                |
+| `MAX_REQUESTS_PER_HOLE`  | backend             | `100`           | Requests kept per hole. Each capture beyond the cap evicts that hole's oldest request.                                                                                          |
+| `HOLE_CREATE_RATE_LIMIT` | backend             | `10`            | Hole creations allowed per client IP per hour; further ones get `429`.                                                                                                          |
+| `CAPTURE_RATE_LIMIT`     | backend             | `60`            | Captures allowed per client IP per minute; further ones get `429`.                                                                                                              |
+| `MAX_HOLES`              | backend             | `1000`          | Total holes the deployment will hold. At the ceiling, creation is refused with `503` — nothing is evicted to make room.                                                         |
+| `MAX_HOLES_PER_IP`       | backend             | `20`            | Live holes one client may hold at once, IPv6 counted per /64. Beyond it, creation is refused with `429`, so filling `MAX_HOLES` takes many clients rather than one patient one. |
+| `MAX_BODY_BYTES`         | backend             | `1048576`       | Largest request body a hole will capture; anything bigger is rejected with `413`.                                                                                               |
 
 The backend knobs are all optional and apply to the running container: set them
 under the `backend` service's `environment` in `compose.yml`, or pass them
@@ -146,6 +149,19 @@ one hop, so a client cannot pick its own bucket by setting the header itself.
 Nginx also leaves body size to the backend and streams bodies through
 unbuffered, so `MAX_BODY_BYTES` is the one place the limit lives and an
 oversized upload is cut off at the limit rather than spooled to disk first.
+Nginx allows each client ten capture uploads in flight at once, and the backend
+gives any request 30 seconds to arrive in full, so a slow upload cannot hold a
+connection open indefinitely.
+
+To count each client's share, the backend records the address that created
+each hole. No route ever returns it, and it is deleted along with the hole.
+
+If you put another proxy in front of this stack, such as a TLS terminator or a
+load balancer, Nginx sees that proxy's address for every visitor, and the
+per-client limits collapse into one bucket that everyone shares. Tell Nginx to
+trust the proxy's forwarded address with `set_real_ip_from` (your proxy's
+address) and `real_ip_header X-Forwarded-For`, so `$remote_addr` is the real
+client again.
 
 This is a public, use-at-your-own-risk deployment model: there are no accounts,
 every hole is listed on the home page, and anyone who knows an address can read

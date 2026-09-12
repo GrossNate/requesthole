@@ -10,6 +10,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, Link } from "react-router-dom";
 import type { RequestObject } from "../types";
+import { HoleGoneError } from "../errors";
 import holeService from "../services";
 import { formatTimestamp } from "../utils/format";
 import Hole from "./Hole";
@@ -70,6 +71,13 @@ function StubEventSource(url: string): StubEventSource {
   return lastEventSource;
 }
 vi.stubGlobal("EventSource", StubEventSource);
+
+// The server's word that the hole itself is gone.
+const streamHoleDeleted = (hole_address: string) => {
+  for (const listener of lastEventSource!.listeners["hole-deleted"] ?? []) {
+    listener({ data: JSON.stringify({ hole_address }) } as MessageEvent);
+  }
+};
 
 // The server's delete frame, as the hook would receive it.
 const streamDelete = (request_address: string) => {
@@ -1273,6 +1281,59 @@ describe("Hole stream deletes", () => {
     act(() => streamDelete("nosuch"));
 
     expect(screen.getByText("/abc123")).toBeVisible();
+  });
+});
+
+// A hole swept by retention or deleted in another tab used to leave its
+// viewers on an empty hole still reading Live, whose capture URL now 404s.
+describe("Hole that no longer exists", () => {
+  it("says so when the stream reports the hole deleted", async () => {
+    vi.mocked(holeService.getRequests).mockResolvedValue([capturedRequest()]);
+    renderHole();
+    await screen.findByText("/abc123");
+    act(() => lastEventSource!.onopen!());
+
+    act(() => streamHoleDeleted("abc123"));
+
+    expect(screen.getByText(/no longer exists/i)).toBeVisible();
+    expect(screen.queryByText("/abc123")).not.toBeInTheDocument();
+    // Nothing is live, and there is no longer a URL worth copying.
+    expect(screen.queryByText(/^live$/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /copy url/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: /back to all holes/i }),
+    ).toBeVisible();
+  });
+
+  it("closes the stream once the hole is gone", async () => {
+    vi.mocked(holeService.getRequests).mockResolvedValue([]);
+    renderHole();
+    await screen.findByText(/no requests captured yet/i);
+    const source = lastEventSource!;
+
+    act(() => streamHoleDeleted("abc123"));
+
+    expect(source.close).toHaveBeenCalled();
+  });
+
+  // The viewer that missed the frame: it reconnects, and the snapshot is
+  // what finds the hole gone.
+  it("says so when a snapshot finds no hole, without retrying", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.mocked(holeService.getRequests).mockRejectedValue(new HoleGoneError());
+    renderHole();
+
+    expect(await screen.findByText(/no longer exists/i)).toBeVisible();
+    expect(
+      screen.queryByText(/couldn't load this hole's requests/i),
+    ).not.toBeInTheDocument();
+
+    await act(async () => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(holeService.getRequests).toHaveBeenCalledTimes(1);
   });
 });
 

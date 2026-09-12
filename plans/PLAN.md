@@ -48,17 +48,24 @@ Durable decisions that apply across all tasks.
   `X-Forwarded-For: $remote_addr`, so a client cannot choose its bucket) and `@fastify/rate-limit`
   keyed on that IP (`HOLE_CREATE_RATE_LIMIT` 10/hour, `CAPTURE_RATE_LIMIT` 60/minute, one shared
   capture bucket across bare address and sub-paths); total ceiling `MAX_HOLES`
-  (1000) refuses creation with a bare 503, never evicts; `MAX_BODY_BYTES` (1 MB) → 413. Knobs are
-  read once in `src/config.ts` (override → env → default) and fail fast on non-integers. Every
-  deletion — user request delete, hole delete, eviction, sweep — is broadcast as an SSE `delete`
-  frame; hole delete and sweep share `src/hole-removal.ts`. Nginx sets `client_max_body_size 0`
-  on collect so `MAX_BODY_BYTES` is the single body-size authority.
+  (1000) refuses creation with a bare 503, never evicts; a per-client share of live holes
+  (`MAX_HOLES_PER_IP`, 20, IPv6 per /64, keyed like the limiter) refuses with 429 first, so one
+  patient client cannot fill the ceiling; `MAX_BODY_BYTES` (1 MB) → 413. Knobs are read once in
+  `src/config.ts` (override → env → default) and fail fast on anything but a positive safe
+  integer. Request deletes and insert-time evictions are broadcast as SSE `delete` frames; a hole
+  going (API delete or sweep, shared in `src/hole-removal.ts`) is one `hole-deleted` frame, and
+  `GET /api/hole/:addr/requests` answers 404 for a missing hole so a reconnecting viewer can tell
+  gone from empty. Nginx collect sets `client_max_body_size 0` with `proxy_request_buffering off`,
+  so bodies stream to the backend's 413 instead of spooling to nginx's disk and `MAX_BODY_BYTES` is
+  the single body-size authority; `limit_conn` 10 per client and `client_body_timeout 10s` cap
+  slow uploads, and the backend's `requestTimeout` (30s) bounds receipt of any request.
 - **Untrusted bodies**: captured request bodies are attacker-controlled and must never execute on
   this origin. The body endpoint serves them with `x-content-type-options: nosniff` and
   `content-disposition: attachment`; the viewer fetches bytes and renders them as escaped text, never
   via `dangerouslySetInnerHTML`, an iframe, or navigation to the body URL. `text/html` is shown as
   source. Inline `<img>` is fine — sub-resource loads ignore both headers.
-- **Schema**: two tables — `holes` (`hole_address`, `created`) and `requests` (`request_address`,
+- **Schema**: two tables — `holes` (`hole_address`, `created`, `creator_ip` — task 0007, never
+  returned by any route, added by an idempotent `ALTER TABLE` on older databases) and `requests` (`request_address`,
   `hole_id` FK `ON DELETE CASCADE`, `created`, `method`, `request_path`, `query_params`, `headers`,
   `body`). `query_params`/`headers` stored as JSON text; `body` as binary.
 - **Storage** (SQLite since task 0002): `better-sqlite3`, raw SQL, no ORM — one long-lived

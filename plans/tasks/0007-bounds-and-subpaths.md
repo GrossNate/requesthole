@@ -160,7 +160,7 @@ What was built, and where:
 - `src/routes/collect.ts` — one handler registered at `/:hole_address` and `/:hole_address/*`;
   insert + trim (`DELETE … RETURNING request_address`) in one `db.transaction`, inside the
   unique-address retry so a failed attempt rolls back whole. Evicted addresses are broadcast as
-  delete frames after the capture frame. Per-route `config.rateLimit`.
+  delete frames after the capture frame. Per-route `config.rateLimit`. *(Superseded in review round 1: one shared `fastify.rateLimit()`, now an `onRequest` hook.)*
 - `src/retention.ts` — `fastify-plugin` decorating `sweepExpiredHoles()`; hourly `setInterval`,
   unref'd and cleared `onClose`. Lists doomed requests before the cascade so viewers hear.
 - `src/routes/hole.ts` — `COUNT(*)` ceiling check before insert, bare `503` at the limit (matches
@@ -169,7 +169,7 @@ What was built, and where:
   `RETURNING` a correlated `hole_address` so the frame can be routed to the right hole.
 - `src/RequestBroadcaster.ts` — `broadcastDelete(hole, request)` → `{event: "delete", data:
   {request_address}}`.
-- `src/app.ts` — `trustProxy: true`, `bodyLimit: config.maxBodyBytes`, `@fastify/rate-limit`
+- `src/app.ts` — `trustProxy: true` *(superseded in review round 1: `trustProxy: 1`)*, `bodyLimit: config.maxBodyBytes`, `@fastify/rate-limit`
   registered with `global: false`.
 - Frontend: `useHoleStream` gains optional `onDelete`, wired via `addEventListener("delete")`;
   `Hole.tsx` factors the row drop into `dropRequest`, shared by the user delete and the stream
@@ -243,3 +243,30 @@ Decisions beyond the spec's letter, kept deliberately:
 - `DELETE /api/hole/:addr` broadcasts a delete frame per request it takes: a fourth deletion source
   beyond the three the spec listed, sharing the sweep's code path, so a viewer in another tab does
   not keep rows for a hole that is gone.
+
+**Review round 3 (2026-09-12) — all twelve findings fixed on request.** Two were decisions; the user
+chose the recommended option for both.
+
+- **Per-client hole share (decision).** `MAX_HOLES_PER_IP`, default 20: a client at its share gets a
+  bare 429 before the global ceiling is consulted. Keyed by `normalizeIP` from `@fastify/rate-limit`,
+  so IPv6 is grouped by /64 exactly as the rate limits group it. Needs `holes.creator_ip`, added to
+  older databases by an idempotent `ALTER TABLE`; never returned by any route, swept with its hole.
+  Chosen over a startup check on the knob arithmetic, which the documented defaults would fail.
+- **Hole-gone state (decision).** A hole going (API delete or sweep) is one `hole-deleted` frame
+  instead of a delete frame per request; `hole-removal.ts` is now a single `DELETE … RETURNING`, and
+  `isWatched` is gone with the per-request listing. `GET /api/hole/:addr/requests` answers 404 for a
+  missing hole, so a viewer that missed the frame finds out on its next snapshot. The frontend maps
+  that 404 to `HoleGoneError` (in `src/errors.ts`, outside the mocked service module), and the view
+  closes its stream, stops retrying, and shows "This hole no longer exists" with no badge and no
+  capture URL. This replaces the spec's per-request frame for the sweep with a hole-level one: the
+  viewer still loses every row without waiting for a snapshot, which was the point of that item.
+- **Slow uploads.** Backend `requestTimeout: 30_000` (receipt only; SSE responses unaffected).
+  nginx collect adds `limit_conn` 10 per client (status 429) and `client_body_timeout 10s`. The
+  backend test asserts the configured deadline: Node enforces it on a 30s sweep, too slow to wait
+  out in a test.
+- Docs: PLAN.md records `proxy_request_buffering off`, the share, the frame, and the timeouts;
+  README's intro no longer claims the port is the only setting, and it gains the share row, the
+  creator-address note, and a warning about putting another proxy in front (`set_real_ip_from`).
+  The `trustProxy` comments say nginx replaces the header. Superseded log bullets are marked.
+- Tests: a malformed bare address is shown not to count against the capture budget. The address
+  regex compiles once.

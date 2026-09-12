@@ -1,4 +1,5 @@
 import axios from "axios";
+import { HoleGoneError } from "./errors";
 import type { RequestObject } from "./types";
 import { isAddress } from "./utils/address";
 
@@ -87,6 +88,14 @@ async function getRequests(holeAddress: string): Promise<RequestObject[]> {
     } else {
       throw new Error("Failed to get requests.");
     }
+  } catch (error) {
+    // 404 means the hole is gone, where an empty hole answers []. Worth a
+    // type of its own: every other failure is retried, and this one never
+    // will succeed.
+    const status = (error as { response?: { status?: number } } | null)
+      ?.response?.status;
+    if (status === 404) throw new HoleGoneError();
+    throw error;
   } finally {
     clearTimeout(idle);
   }

@@ -9,6 +9,7 @@ describe("loadConfig", () => {
       holeCreateRateLimit: 10,
       captureRateLimit: 60,
       maxHoles: 1000,
+      maxHolesPerIp: 20,
       maxBodyBytes: 1048576,
     });
   });
@@ -23,6 +24,7 @@ describe("loadConfig", () => {
           HOLE_CREATE_RATE_LIMIT: "2",
           CAPTURE_RATE_LIMIT: "9",
           MAX_HOLES: "42",
+          MAX_HOLES_PER_IP: "4",
           MAX_BODY_BYTES: "2048",
         },
       ),
@@ -32,6 +34,7 @@ describe("loadConfig", () => {
       holeCreateRateLimit: 2,
       captureRateLimit: 9,
       maxHoles: 42,
+      maxHolesPerIp: 4,
       maxBodyBytes: 2048,
     });
   });

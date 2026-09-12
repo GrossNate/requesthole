@@ -13,6 +13,7 @@ services:
       # HOLE_CREATE_RATE_LIMIT: 10
       # CAPTURE_RATE_LIMIT: 60
       # MAX_HOLES: 1000
+      # MAX_HOLES_PER_IP: 20
       # MAX_BODY_BYTES: 1048576
     volumes:
       # Directory volume, not a single file: SQLite WAL mode writes .db + -wal + -shm

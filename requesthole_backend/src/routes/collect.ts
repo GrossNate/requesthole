@@ -21,7 +21,8 @@ interface HoleParams {
 // One definition for the schema below and the limiter's own check, which
 // runs before validation and so has to test the address itself.
 const ADDRESS_PATTERN = "^[a-zA-Z0-9]{6}$";
-const isAddress = (value: string) => new RegExp(ADDRESS_PATTERN).test(value);
+const ADDRESS = new RegExp(ADDRESS_PATTERN);
+const isAddress = (value: string) => ADDRESS.test(value);
 
 const params: JSONSchemaType<HoleParams> = {
   type: "object",

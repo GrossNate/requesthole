@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, memo } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import holeService from "../services";
 import { type RequestObject, type LoadState } from "../types";
+import { HoleGoneError } from "../errors";
 import { useHoleStream, type ConnectionState } from "../hooks/useHoleStream";
 import { formatQueryParams, formatTimestamp } from "../utils/format";
 import { holeCaptureUrl } from "../utils/holeUrl";
@@ -176,6 +177,10 @@ const HoleView = ({
 }) => {
   const [holeRequests, setHoleRequests] = useState<RequestObject[]>([]);
   const [loadState, setLoadState] = useState<LoadState>("loading");
+  // The hole was deleted or swept by retention. Terminal: nothing here will
+  // bring it back, so the view stops following it and says so.
+  const [gone, setGone] = useState(false);
+  const goneRef = useRef(false);
   const navigate = useNavigate();
   const holeFullUrl = holeCaptureUrl(holeAddress);
 
@@ -241,9 +246,19 @@ const HoleView = ({
     };
   }, []);
 
+  // Reached two ways: the stream's `hole-deleted` frame, or a snapshot that
+  // finds no hole (the viewer was disconnected when the frame went out). The
+  // ref stops a queued re-sync or a scheduled retry from asking again.
+  const markGone = useCallback(() => {
+    goneRef.current = true;
+    clearTimeout(retryTimer.current);
+    setHoleRequests([]);
+    setGone(true);
+  }, []);
+
   const loadRequests = useCallback(
     function run() {
-      if (!addressIsValid) return;
+      if (!addressIsValid || goneRef.current) return;
       if (snapshotPending.current) {
         resyncQueued.current = true;
         return;
@@ -279,6 +294,11 @@ const HoleView = ({
           setLoadState("loaded");
         })
         .catch((error) => {
+          // Not a failure to retry: there is no hole left to load.
+          if (error instanceof HoleGoneError) {
+            if (mounted.current) markGone();
+            return;
+          }
           console.error(error);
           // Rows already on screen survive a failed re-sync. They are the last
           // captures we know about and still worth reading; the connection badge
@@ -308,7 +328,7 @@ const HoleView = ({
           }
         });
     },
-    [holeAddress, addressIsValid],
+    [holeAddress, addressIsValid, markGone],
   );
 
   useEffect(() => {
@@ -338,7 +358,9 @@ const HoleView = ({
   );
 
   const connectionState = useHoleStream({
-    holeAddress,
+    // Not an address once the hole is gone, which holds the stream closed:
+    // there is nothing left on it to follow.
+    holeAddress: gone ? "" : holeAddress,
     onMessage: useCallback((data: string) => {
       const captured = JSON.parse(data) as RequestObject;
       // The stream delivering this address is proof the backend has it now,
@@ -370,6 +392,7 @@ const HoleView = ({
       },
       [dropRequest],
     ),
+    onHoleDeleted: markGone,
     // Whatever landed while nothing was subscribed is on no stream anyone was
     // reading, so a snapshot is the only way those captures ever appear.
     onOpen: loadRequests,
@@ -563,52 +586,70 @@ const HoleView = ({
           <h1 className="page-title">
             Hole <span className="text-primary address">{holeAddress}</span>
           </h1>
-          <ConnectionBadge state={connectionState} />
+          {gone ? null : <ConnectionBadge state={connectionState} />}
         </div>
-        <div className="border-base-300 bg-base-200/50 gap-snug px-gutter py-tight rounded-box flex flex-wrap items-center border">
-          <span className="section-label">Capture URL</span>
-          <code className="address text-secondary grow overflow-x-auto">
-            {holeFullUrl}
-          </code>
-          <CopyButton value={holeFullUrl} label="Copy URL" />
-        </div>
+        {/* A capture URL for a hole that is gone only 404s: not worth copying. */}
+        {gone ? null : (
+          <div className="border-base-300 bg-base-200/50 gap-snug px-gutter py-tight rounded-box flex flex-wrap items-center border">
+            <span className="section-label">Capture URL</span>
+            <code className="address text-secondary grow overflow-x-auto">
+              {holeFullUrl}
+            </code>
+            <CopyButton value={holeFullUrl} label="Copy URL" />
+          </div>
+        )}
       </div>
 
-      {/* One column until a request is selected — an empty second column would
+      {gone ? (
+        <EmptyState
+          title="This hole no longer exists"
+          description="It was deleted, or it expired after the retention period. Its captured requests went with it, and nothing sent to its address is captured any more."
+        >
+          <Link to="/" className="btn btn-sm btn-primary">
+            Back to all holes
+          </Link>
+        </EmptyState>
+      ) : (
+        <>
+          {/* One column until a request is selected — an empty second column would
           just be the detail pane's silhouette with nothing in it. */}
-      {/* `grid-cols-1` is not the default it looks like: an implicit column is
+          {/* `grid-cols-1` is not the default it looks like: an implicit column is
           sized to its content, and mono tables happily run wider than a phone.
           Every track here is explicitly allowed to shrink. */}
-      <div
-        className={`gap-gutter grid min-h-0 min-w-0 flex-1 grid-cols-1 ${
-          selectedAddress ? "lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]" : ""
-        }`}
-      >
-        {/* Two panes side by side from `lg` up; below it there is only room
-            for one, so the selection decides which. */}
-        <section
-          aria-label="Captured requests"
-          className={`min-h-0 min-w-0 flex-col ${
-            selectedAddress ? "hidden lg:flex" : "flex"
-          }`}
-        >
-          {listing()}
-        </section>
-        {selectedAddress ? (
-          <section
-            aria-label="Request detail"
-            className="border-base-300 lg:ps-gutter gap-snug flex min-h-0 min-w-0 flex-col lg:border-s"
+          <div
+            className={`gap-gutter grid min-h-0 min-w-0 flex-1 grid-cols-1 ${
+              selectedAddress
+                ? "lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]"
+                : ""
+            }`}
           >
-            <Link
-              to={`/view/${holeAddress}`}
-              className="btn btn-sm btn-ghost text-body self-start lg:hidden"
+            {/* Two panes side by side from `lg` up; below it there is only room
+            for one, so the selection decides which. */}
+            <section
+              aria-label="Captured requests"
+              className={`min-h-0 min-w-0 flex-col ${
+                selectedAddress ? "hidden lg:flex" : "flex"
+              }`}
             >
-              ← All requests
-            </Link>
-            <Request />
-          </section>
-        ) : null}
-      </div>
+              {listing()}
+            </section>
+            {selectedAddress ? (
+              <section
+                aria-label="Request detail"
+                className="border-base-300 lg:ps-gutter gap-snug flex min-h-0 min-w-0 flex-col lg:border-s"
+              >
+                <Link
+                  to={`/view/${holeAddress}`}
+                  className="btn btn-sm btn-ghost text-body self-start lg:hidden"
+                >
+                  ← All requests
+                </Link>
+                <Request />
+              </section>
+            ) : null}
+          </div>
+        </>
+      )}
     </div>
   );
 };

@@ -23,14 +23,20 @@ export default function buildApp(options: AppOptions = {}): FastifyInstance {
   const config = loadConfig(options.config);
   const fastify = Fastify({
     logger: options.logger ?? false,
-    // The only path to the backend is through our own nginx, which forwards
-    // X-Forwarded-For. Without this the limiter would see nginx's address for
-    // every request and lump all clients into one bucket, so the first person
-    // to hit a limit would lock out everybody. Exactly one hop, not `true`:
-    // nginx appends the real peer to whatever the client sent, and trusting
-    // every hop would make the client's own (leftmost) entry the key — a
-    // fresh bucket per request for anyone who sets the header.
+    // The only path to the backend is through our own nginx, which sets
+    // X-Forwarded-For to the peer address it saw, replacing anything the
+    // client sent. Without proxy trust the limiter would see nginx's address
+    // for every request and lump all clients into one bucket, so the first
+    // person to hit a limit would lock out everybody. Exactly one hop, not
+    // `true`, as defence in depth: should a chain ever arrive, trusting every
+    // hop would make the client's own leftmost entry the key.
     trustProxy: 1,
+    // Deadline for receiving a whole request, headers and body. nginx streams
+    // capture bodies through unbuffered, so without one a client trickling
+    // bytes holds a socket and a growing buffer forever; Fastify's default is
+    // no deadline. Covers receipt only, so long-lived SSE responses are
+    // unaffected.
+    requestTimeout: 30_000,
     // Over the limit, Fastify's own content-type parsing answers 413.
     bodyLimit: config.maxBodyBytes,
   });
