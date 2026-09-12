@@ -41,6 +41,15 @@ describe("loadConfig", () => {
   });
 
   it.each([
+    ["maxHoles", 0],
+    ["maxBodyBytes", -1],
+    ["captureRateLimit", 1.5],
+    ["retentionDays", Number.NaN],
+  ])("fails fast on a nonsense %s override too", (key, value) => {
+    expect(() => loadConfig({ [key]: value }, {})).toThrow(key);
+  });
+
+  it.each([
     ["RETENTION_DAYS", "0"],
     ["MAX_REQUESTS_PER_HOLE", "-1"],
     ["HOLE_CREATE_RATE_LIMIT", "abc"],

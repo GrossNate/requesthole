@@ -44,11 +44,15 @@ Durable decisions that apply across all tasks.
   ownership, the global hole list stays; the controls bound consumption, not access. Per-hole cap
   (`MAX_REQUESTS_PER_HOLE`, 100) trimmed at insert time in the capture transaction; hourly TTL
   sweep (`RETENTION_DAYS`, 7) cascading to requests, timer cleared on close; `requests(hole_id)`
-  indexed. `trustProxy: true` so `@fastify/rate-limit` keys on the forwarded client IP
-  (`HOLE_CREATE_RATE_LIMIT` 10/hour, `CAPTURE_RATE_LIMIT` 60/minute); total ceiling `MAX_HOLES`
+  indexed; the sweep also runs once at startup. `trustProxy: 1` (one hop, nginx's own
+  `X-Forwarded-For: $remote_addr`, so a client cannot choose its bucket) and `@fastify/rate-limit`
+  keyed on that IP (`HOLE_CREATE_RATE_LIMIT` 10/hour, `CAPTURE_RATE_LIMIT` 60/minute, one shared
+  capture bucket across bare address and sub-paths); total ceiling `MAX_HOLES`
   (1000) refuses creation with a bare 503, never evicts; `MAX_BODY_BYTES` (1 MB) → 413. Knobs are
   read once in `src/config.ts` (override → env → default) and fail fast on non-integers. Every
-  deletion — user, eviction, sweep — is broadcast as an SSE `delete` frame.
+  deletion — user request delete, hole delete, eviction, sweep — is broadcast as an SSE `delete`
+  frame; hole delete and sweep share `src/hole-removal.ts`. Nginx sets `client_max_body_size 0`
+  on collect so `MAX_BODY_BYTES` is the single body-size authority.
 - **Untrusted bodies**: captured request bodies are attacker-controlled and must never execute on
   this origin. The body endpoint serves them with `x-content-type-options: nosniff` and
   `content-disposition: attachment`; the viewer fetches bytes and renders them as escaped text, never

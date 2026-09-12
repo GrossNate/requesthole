@@ -7,6 +7,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import buildApp from "../src/app";
 import RequestBroadcaster from "../src/RequestBroadcaster";
 import type { FastifyInstance } from "fastify";
+import { captureRequest, createHole } from "./helpers";
 
 describe("holes", () => {
   let app: FastifyInstance;
@@ -504,37 +505,3 @@ describe("persistence", () => {
     await secondApp.close();
   });
 });
-
-async function captureRequest(
-  app: FastifyInstance,
-  body: string | Buffer,
-  contentType = "text/plain",
-): Promise<string> {
-  const holeAddress = await createHole(app);
-  await app.inject({
-    method: "POST",
-    url: `/${holeAddress}`,
-    headers: { "content-type": contentType },
-    body,
-  });
-  const listed = await app.inject({
-    method: "GET",
-    url: `/api/hole/${holeAddress}/requests`,
-  });
-  const requestAddress =
-    listed.json<{ request_address: string }[]>()[0]?.request_address;
-  if (requestAddress === undefined) {
-    throw new Error("request capture failed");
-  }
-  return requestAddress;
-}
-
-async function createHole(app: FastifyInstance): Promise<string> {
-  const response = await app.inject({ method: "POST", url: "/api/hole" });
-  const rows = response.json<{ hole_address: string }[]>();
-  const address = rows[0]?.hole_address;
-  if (address === undefined) {
-    throw new Error("hole creation failed");
-  }
-  return address;
-}

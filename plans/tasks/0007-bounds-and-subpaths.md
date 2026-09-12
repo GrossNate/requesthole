@@ -189,6 +189,25 @@ Decisions made along the way (no `[decision]` items were open):
 - The sweep cadence test drives the interval with fake timers and reads through `app.db` rather
   than `inject`, because `inject` arms a timer of its own that survives `close`.
 
-Worth a look in review: `trustProxy: true` (as specified) trusts every hop, so `request.ip`
-is the *leftmost* `X-Forwarded-For` entry — which a client can set. `trustProxy: 1` would trust
-only nginx and take the address nginx itself appended. Left as specified; flagged.
+**Review round 1 (2026-09-12) — all eleven findings fixed on request.**
+
+- `trustProxy: 1` instead of `true`, and nginx now sends `X-Forwarded-For $remote_addr` on both
+  proxy locations, so a client-supplied entry never reaches the limiter. Test: a two-entry
+  forwarded chain keys on the rightmost (nginx-written) address.
+- One capture limiter built with `fastify.rateLimit()` and attached as a `preHandler` to both
+  collect routes — one bucket across bare address and sub-paths (a per-route `config.rateLimit`
+  gave each route its own store). Running after validation also means a stray path never eats
+  capture budget.
+- Collect routes carry an `errorHandler` mapping validation failures to a bare 404, so an
+  unknown multi-segment path such as `/api/nope/x` reads as not found rather than a malformed
+  address.
+- `src/hole-removal.ts`: list-then-delete-then-broadcast, shared by `DELETE /api/hole/:addr`
+  and the retention sweep. Hole delete now broadcasts every request it takes.
+- Sweep runs once `onReady` as well as hourly; cutoff is computed once in JS and bound to both
+  statements so the listing and the delete agree.
+- nginx `client_max_body_size 0` on the collect location; `MAX_BODY_BYTES` is the only body
+  limit. Assets-location comment states the 404-on-missing behaviour is deliberate.
+- Config overrides go through the same positive-integer check as the environment.
+- `test/helpers.ts` holds `createHole`/`listRequests`/`captureRequest`/`backdate`, imported by
+  both backend suites. A wire-level test reads the `event: delete` frame off a real socket.
+- Backend 71 tests, frontend 226; smoke test re-run against the rebuilt stack.

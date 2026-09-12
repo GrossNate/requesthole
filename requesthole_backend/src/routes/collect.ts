@@ -140,18 +140,44 @@ function routesWrapper(
       }
     };
 
+    // One limiter, built once and attached to both routes below. A per-route
+    // `config.rateLimit` would give each route its own store, and so a client
+    // double the documented budget by alternating the bare address and a
+    // sub-path. Run as a preHandler, after validation, so a stray path that
+    // fails the address pattern is never metered against captures.
+    const limitCaptures = fastify.rateLimit({
+      max: config.captureRateLimit,
+      timeWindow: "1 minute",
+    });
+
     // The bare address and anything beneath it: webhook configs get pasted
     // with sub-paths (`/abc123/webhook`), and those must land in the same
     // hole. `/api/*` routes are static and so win over the parametric
-    // wildcard in Fastify's router.
+    // wildcard in Fastify's router — but the wildcard is now the catch-all
+    // for any unknown multi-segment path, and those should read as not
+    // found, not as a malformed address.
     for (const url of ["/:hole_address", "/:hole_address/*"]) {
       fastify.all<{ Params: HoleParams }>(
         url,
         {
           ...options,
           schema: { params },
-          config: {
-            rateLimit: { max: config.captureRateLimit, timeWindow: "1 minute" },
+          // Callback form rather than async: the route-options type accepts
+          // both, and the lint rule against promise-valued properties cannot
+          // tell. The limiter is itself a Fastify hook and wants the instance
+          // as `this`.
+          preHandler: (request, reply, done) => {
+            limitCaptures
+              .call(fastify, request, reply)
+              .then(() => done(), done);
+          },
+          errorHandler: (error, _request, reply) => {
+            if (error.validation) {
+              reply.code(404);
+              reply.send();
+              return;
+            }
+            reply.send(error);
           },
         },
         collect,

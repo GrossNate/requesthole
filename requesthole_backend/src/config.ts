@@ -51,6 +51,14 @@ export default function loadConfig(
   for (const { key, env: name, fallback } of KNOBS) {
     const override = overrides[key];
     if (override !== undefined) {
+      // Overrides get the same check as the environment: a test or embedder
+      // passing 0 or a negative would otherwise reach SQL LIMIT/OFFSET and the
+      // limiter unvalidated.
+      if (!Number.isInteger(override) || override < 1) {
+        throw new Error(
+          `${key} must be a positive integer, got ${String(override)}`,
+        );
+      }
       config[key] = override;
       continue;
     }

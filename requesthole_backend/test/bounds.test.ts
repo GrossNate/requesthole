@@ -2,6 +2,11 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import buildApp, { AppOptions } from "../src/app";
 import RequestBroadcaster from "../src/RequestBroadcaster";
 import type { FastifyInstance } from "fastify";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import http from "node:http";
+import { backdate, createHole, listRequests } from "./helpers";
 
 describe("resource bounds", () => {
   const apps: FastifyInstance[] = [];
@@ -90,6 +95,16 @@ describe("resource bounds", () => {
       expect((await createFrom(app, "10.0.0.2")).statusCode).toBe(201);
     });
 
+    it("trusts only the hop nginx wrote, so a spoofed X-Forwarded-For buys nothing", async () => {
+      const app = await start({ config: { holeCreateRateLimit: 1 } });
+      // nginx appends the real peer to whatever the client sent, so the
+      // client's entry is leftmost and nginx's is rightmost. Only the
+      // rightmost may be the key, or every request could pick its own bucket.
+      expect((await createFrom(app, "1.1.1.1, 9.9.9.9")).statusCode).toBe(201);
+      expect((await createFrom(app, "2.2.2.2, 9.9.9.9")).statusCode).toBe(429);
+      expect((await createFrom(app, "3.3.3.3, 8.8.8.8")).statusCode).toBe(201);
+    });
+
     it("limits capture per client IP", async () => {
       const app = await start({ config: { captureRateLimit: 1 } });
       const hole = await createHole(app);
@@ -103,6 +118,35 @@ describe("resource bounds", () => {
       expect((await captureFrom("10.0.0.1")).statusCode).toBe(429);
       expect((await captureFrom("10.0.0.2")).statusCode).toBe(200);
       expect(await listRequests(app, hole)).toHaveLength(2);
+    });
+
+    it("shares one capture budget between the bare address and sub-paths", async () => {
+      const app = await start({ config: { captureRateLimit: 2 } });
+      const hole = await createHole(app);
+      const capture = (url: string) =>
+        app.inject({
+          method: "POST",
+          url,
+          headers: { "x-forwarded-for": "10.0.0.1" },
+        });
+      expect((await capture(`/${hole}`)).statusCode).toBe(200);
+      expect((await capture(`/${hole}/x`)).statusCode).toBe(200);
+      expect((await capture(`/${hole}`)).statusCode).toBe(429);
+      expect((await capture(`/${hole}/y`)).statusCode).toBe(429);
+    });
+
+    it("does not meter junk paths against the capture budget", async () => {
+      const app = await start({ config: { captureRateLimit: 1 } });
+      const hole = await createHole(app);
+      const from = { "x-forwarded-for": "10.0.0.1" };
+      await app.inject({ method: "GET", url: "/api/nope/x", headers: from });
+      await app.inject({ method: "GET", url: "/api/nope/y", headers: from });
+      const real = await app.inject({
+        method: "POST",
+        url: `/${hole}/hook`,
+        headers: from,
+      });
+      expect(real.statusCode).toBe(200);
     });
 
     it("does not limit reading", async () => {
@@ -209,6 +253,12 @@ describe("resource bounds", () => {
       expect(response.statusCode).toBe(404);
     });
 
+    it("answers 404, not 400, for an unknown multi-segment path", async () => {
+      const app = await start();
+      const response = await app.inject({ method: "GET", url: "/api/nope/x" });
+      expect(response.statusCode).toBe(404);
+    });
+
     it("does not swallow /api paths", async () => {
       const app = await start();
       const response = await app.inject({ method: "GET", url: "/api/holes" });
@@ -256,6 +306,26 @@ describe("resource bounds", () => {
       expect(deletes).toHaveBeenCalledExactlyOnceWith(hole, evicted);
     });
 
+    it("broadcasts every request a hole delete takes with it", async () => {
+      const { app, deletes } = await startSpied();
+      const hole = await createHole(app);
+      await app.inject({ method: "POST", url: `/${hole}?n=1` });
+      await app.inject({ method: "POST", url: `/${hole}?n=2` });
+      const addresses = (await listRequests(app, hole)).map(
+        (r) => r.request_address,
+      );
+
+      const response = await app.inject({
+        method: "DELETE",
+        url: `/api/hole/${hole}`,
+      });
+
+      expect(response.statusCode).toBe(204);
+      expect(deletes.mock.calls).toEqual(
+        addresses.map((address) => [hole, address]),
+      );
+    });
+
     it("broadcasts every request a sweep takes with its hole", async () => {
       const { app, deletes } = await startSpied({ retentionDays: 1 });
       const stale = await createHole(app);
@@ -264,13 +334,7 @@ describe("resource bounds", () => {
       const addresses = (await listRequests(app, stale)).map(
         (r) => r.request_address,
       );
-      app.db
-        .prepare(
-          `UPDATE holes
-           SET created = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-2 days')
-           WHERE hole_address = ?`,
-        )
-        .run(stale);
+      backdate(app, stale, 2);
 
       app.sweepExpiredHoles();
 
@@ -280,16 +344,63 @@ describe("resource bounds", () => {
     });
   });
 
-  describe("retention sweep", () => {
-    const backdate = (app: FastifyInstance, hole: string, days: number) =>
-      app.db
-        .prepare(
-          `UPDATE holes
-           SET created = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?)
-           WHERE hole_address = ?`,
-        )
-        .run(`-${days} days`, hole);
+  it("delivers a delete frame over the live SSE stream", async () => {
+    const app = await start();
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const serverAddress = app.server.address();
+    const port =
+      typeof serverAddress === "object" && serverAddress
+        ? serverAddress.port
+        : 0;
+    const hole = await createHole(app);
+    await app.inject({ method: "POST", url: `/${hole}` });
+    const request_address = (await listRequests(app, hole))[0]?.request_address;
 
+    // Subscribe over a real socket: `inject` cannot read a live stream. Wait
+    // for `stream-open` so the subscriber is registered before the delete.
+    let opened: () => void = () => {};
+    const streamOpen = new Promise<void>((resolve) => {
+      opened = resolve;
+    });
+    const frame = new Promise<string>((resolve, reject) => {
+      const req = http.get(
+        { host: "127.0.0.1", port, path: `/api/hole/${hole}/events` },
+        (res) => {
+          res.setEncoding("utf8");
+          let buffer = "";
+          res.on("data", (chunk: string) => {
+            buffer += chunk;
+            if (/^event: stream-open/m.test(buffer)) opened();
+            if (/^event: delete/m.test(buffer)) {
+              req.destroy();
+              resolve(buffer);
+            }
+          });
+        },
+      );
+      req.on("error", reject);
+      setTimeout(() => {
+        req.destroy();
+        reject(new Error("no delete frame arrived within the timeout"));
+      }, 8000).unref();
+    });
+    await streamOpen;
+
+    await app.inject({
+      method: "DELETE",
+      url: `/api/request/${request_address}`,
+    });
+
+    const payload = await frame;
+    const deleteFrame = payload
+      .split("\n\n")
+      .find((block) => block.includes("event: delete"))!;
+    expect(deleteFrame).toContain(
+      `data: ${JSON.stringify({ request_address })}`,
+    );
+  }, 15000);
+
+  describe("retention sweep", () => {
     it("deletes holes past the TTL, requests and all, and keeps newer ones", async () => {
       const app = await start({ config: { retentionDays: 7 } });
       const stale = await createHole(app);
@@ -307,6 +418,25 @@ describe("resource bounds", () => {
       expect(
         app.db.prepare("SELECT COUNT(*) AS n FROM requests").get(),
       ).toEqual({ n: 0 });
+    });
+
+    it("sweeps once at startup, not only after the first hour", async () => {
+      const databasePath = join(
+        mkdtempSync(join(tmpdir(), "requesthole-test-")),
+        "requesthole.db",
+      );
+      const first = await start({ databasePath, config: { retentionDays: 1 } });
+      const stale = await createHole(first);
+      backdate(first, stale, 2);
+      await first.close();
+      apps.splice(0);
+
+      const second = await start({
+        databasePath,
+        config: { retentionDays: 1 },
+      });
+      const holes = await second.inject({ method: "GET", url: "/api/holes" });
+      expect(holes.json()).toEqual([]);
     });
 
     it("runs hourly and stops when the server closes", async () => {
@@ -340,21 +470,3 @@ describe("resource bounds", () => {
     });
   });
 });
-
-export async function createHole(app: FastifyInstance): Promise<string> {
-  const response = await app.inject({ method: "POST", url: "/api/hole" });
-  const rows = response.json<{ hole_address: string }[]>();
-  const address = rows[0]?.hole_address;
-  if (address === undefined) {
-    throw new Error("hole creation failed");
-  }
-  return address;
-}
-
-export async function listRequests(app: FastifyInstance, holeAddress: string) {
-  const listed = await app.inject({
-    method: "GET",
-    url: `/api/hole/${holeAddress}/requests`,
-  });
-  return listed.json<{ request_address: string; request_path: string }[]>();
-}

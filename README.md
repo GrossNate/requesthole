@@ -141,6 +141,10 @@ under the `backend` service's `environment` in `compose.yml`, or pass them
 through your shell. Each must be a positive integer; the backend refuses to
 start on anything else. Rate limits key on the client address that Nginx
 forwards in `X-Forwarded-For`, so one busy client cannot lock everyone else out.
+Nginx sends only the peer address it saw, and the backend trusts exactly that
+one hop, so a client cannot pick its own bucket by setting the header itself.
+Nginx also leaves body size to the backend: `MAX_BODY_BYTES` is the one place
+the limit lives.
 
 This is a public, use-at-your-own-risk deployment model: there are no accounts,
 every hole is listed on the home page, and anyone who knows an address can read

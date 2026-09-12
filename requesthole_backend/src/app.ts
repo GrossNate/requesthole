@@ -26,15 +26,18 @@ export default function buildApp(options: AppOptions = {}): FastifyInstance {
     // The only path to the backend is through our own nginx, which forwards
     // X-Forwarded-For. Without this the limiter would see nginx's address for
     // every request and lump all clients into one bucket, so the first person
-    // to hit a limit would lock out everybody.
-    trustProxy: true,
+    // to hit a limit would lock out everybody. Exactly one hop, not `true`:
+    // nginx appends the real peer to whatever the client sent, and trusting
+    // every hop would make the client's own (leftmost) entry the key — a
+    // fresh bucket per request for anyone who sets the header.
+    trustProxy: 1,
     // Over the limit, Fastify's own content-type parsing answers 413.
     bodyLimit: config.maxBodyBytes,
   });
 
-  // Per-route budgets only: each rate-limited route declares its own
-  // `config.rateLimit`; reads stay unmetered. Keyed on `request.ip`, which
-  // is the forwarded client address thanks to `trustProxy` above.
+  // Per-route budgets only: each rate-limited route attaches its own limiter;
+  // reads stay unmetered. Keyed on `request.ip`, which is the forwarded
+  // client address thanks to `trustProxy` above.
   fastify.register(rateLimit, { global: false });
 
   fastify.register(FastifySSEPlugin);

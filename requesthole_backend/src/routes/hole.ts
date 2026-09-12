@@ -5,6 +5,7 @@ import insertWithUniqueAddress from "../utils/unique-insert";
 import RequestBroadcaster from "../RequestBroadcaster";
 import { HoleParams } from "../schemas";
 import { Config } from "../config";
+import prepareHoleRemoval from "../hole-removal";
 
 const params: JSONSchemaType<HoleParams> = {
   type: "object",
@@ -31,8 +32,10 @@ function routesWrapper(
       "INSERT INTO holes (hole_address) VALUES (?) RETURNING created, hole_address;",
     );
     const countHoles = fastify.db.prepare("SELECT COUNT(*) AS n FROM holes;");
-    const deleteHole = fastify.db.prepare(
-      "DELETE FROM holes WHERE hole_address = ?;",
+    const removeHole = prepareHoleRemoval(
+      fastify.db,
+      requestBroadcaster,
+      "holes.hole_address = ?",
     );
     const selectHoleRequests = fastify.db.prepare(
       `
@@ -91,7 +94,7 @@ function routesWrapper(
       { ...options, schema: { params } },
       async (request, reply) => {
         const { hole_address } = request.params;
-        const { changes } = deleteHole.run(hole_address);
+        const changes = removeHole(hole_address);
         reply.code(changes > 0 ? 204 : 404);
       },
     );

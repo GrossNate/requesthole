@@ -35,9 +35,7 @@ describe("POST /api/hole collision retry", () => {
 
     // The generator hands out the already-taken "AAAAAA" first (a DB UNIQUE
     // collision), then a fresh "BBBBBB"; the route must retry and succeed.
-    mockedGenerate
-      .mockReturnValueOnce("AAAAAA")
-      .mockReturnValueOnce("BBBBBB");
+    mockedGenerate.mockReturnValueOnce("AAAAAA").mockReturnValueOnce("BBBBBB");
     const second = await app.inject({ method: "POST", url: "/api/hole" });
 
     expect(second.statusCode).toBe(201);
