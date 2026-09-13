@@ -206,17 +206,21 @@ const HoleView = ({
   // same question — the answer can be legitimately empty.
   const everLoaded = useRef(false);
 
-  // Captures the stream delivered since the current snapshot was requested.
-  // The snapshot is authoritative about what the hole contains *as of when it
-  // was taken*, which is how a request deleted in another tab finally leaves
-  // this list — but it knows nothing about these, which are newer than it.
+  // Captures the stream delivered while the current snapshot is out. The
+  // snapshot is authoritative about what the hole contains *as of when it was
+  // taken*, which is how a request deleted in another tab finally leaves this
+  // list — but it knows nothing about these, which are newer than it. Only
+  // kept while a snapshot is pending: with none out there is nothing for them
+  // to outlive, and on a stream that never drops they would pile up forever.
   const streamedSince = useRef<RequestObject[]>([]);
 
-  // Deleting is the one thing the reader does that a snapshot can undo. A
-  // request deleted while a snapshot was in flight is still in that snapshot's
-  // rows, and merging them would put it back — clickable, and gone from the
-  // backend. Discarded addresses are remembered for as long as this hole is on
-  // screen so no snapshot can reintroduce one.
+  // Requests that went while a snapshot was in flight. That snapshot may
+  // still carry them, and merging its rows would put them back — clickable,
+  // and gone from the backend. Only such a snapshot can do that: one asked for
+  // after the deletion never contains the row. So a tombstone is added only
+  // while a snapshot is pending and cleared when it settles. Kept forever,
+  // the set grew with every eviction on a busy hole and hid any later request
+  // issued the same address.
   const deleted = useRef(new Set<string>());
 
   // Read at resolve time, not capture time: a DELETE settles a render or two
@@ -322,6 +326,10 @@ const HoleView = ({
         })
         .finally(() => {
           snapshotPending.current = false;
+          // The snapshot these guarded against has landed or failed. Any
+          // later one is asked for after the deletions, so it cannot carry
+          // the rows back.
+          deleted.current.clear();
           if (resyncQueued.current) {
             resyncQueued.current = false;
             if (mounted.current) run();
@@ -337,12 +345,12 @@ const HoleView = ({
 
   // One exit for a row, whoever took it: the reader's own delete, or the
   // server's word that another tab or the hole's cap did. (Retention takes
-  // the whole hole, which is `markGone`, not this.) The
-  // tombstone outlives the row so no in-flight snapshot can put it back
-  // (the merge filters `streamedSince` through the same set).
+  // the whole hole, which is `markGone`, not this.) While a snapshot is out,
+  // a tombstone outlives the row so that snapshot cannot put it back (the
+  // merge filters `streamedSince` through the same set).
   const dropRequest = useCallback(
     (request_address: string) => {
-      deleted.current.add(request_address);
+      if (snapshotPending.current) deleted.current.add(request_address);
       // The pane is showing the record that was just deleted, and the URL
       // points at it. Replace rather than push: Back should not return to a
       // request that no longer exists.
@@ -371,7 +379,7 @@ const HoleView = ({
       deleted.current.delete(captured.request_address);
       // Kept aside as well as shown, so the snapshot that is currently out
       // cannot remove a capture that postdates it.
-      streamedSince.current.push(captured);
+      if (snapshotPending.current) streamedSince.current.push(captured);
       // Appended, not merged through a fresh Map of the whole list: this runs
       // once per capture on a hole that may be receiving them in bursts.
       setHoleRequests((prev) => {

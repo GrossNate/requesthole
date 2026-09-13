@@ -24,16 +24,24 @@ const ADDRESS_PATTERN = "^[a-zA-Z0-9]{6}$";
 const ADDRESS = new RegExp(ADDRESS_PATTERN);
 const isAddress = (value: string) => ADDRESS.test(value);
 
+// Decodes `%XX` escapes one by one rather than with `decodeURIComponent`,
+// which throws on the first malformed escape; a fallback to the raw path
+// would switch the check off for `..%2Fapi/x%zz`. Fastify refuses malformed
+// escapes with 400 before routing today, so this is defence in depth, not
+// the only guard. Byte-wise decoding garbles multi-byte characters, but only
+// `.`, `/` and `\` matter here, and those are single bytes.
+const decodeEscapes = (path: string) =>
+  path.replace(/%([0-9a-fA-F]{2})/g, (_, hex: string) =>
+    String.fromCharCode(parseInt(hex, 16)),
+  );
+
+// Decoded first, then split: nginx turns `%2F` into a separator before it
+// resolves dot segments, so `..%2Fapi` is a dot segment by the time nginx
+// picks a location. Backslashes count as separators too.
 const hasDotSegment = (url: string) =>
-  (url.split("?", 1)[0] ?? "").split("/").some((segment) => {
-    let decoded = segment;
-    try {
-      decoded = decodeURIComponent(segment);
-    } catch {
-      // Malformed escapes are left as they came; they are not dot segments.
-    }
-    return decoded === "." || decoded === "..";
-  });
+  decodeEscapes(url.split("?", 1)[0] ?? "")
+    .split(/[/\\]/)
+    .some((segment) => segment === "." || segment === "..");
 
 const params: JSONSchemaType<HoleParams> = {
   type: "object",
@@ -182,7 +190,8 @@ function routesWrapper(
       RawReplyDefaultExpression,
       { Params: HoleParams }
     > = (request, reply, done) => {
-      // A `.` or `..` segment, raw or percent-encoded, is never a capture.
+      // A `.` or `..` segment is never a capture, whether written raw, as
+      // `%2e`, or beside an encoded slash (`..%2F`).
       // nginx normalizes `/abc123/../api/x` to `/api/x` to choose a location,
       // then forwards the raw path, which Fastify does not normalize: such a
       // request would land in this hole by way of nginx's `/api/` location,

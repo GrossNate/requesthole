@@ -13,20 +13,24 @@ export class HoleGoneError extends Error {
 
 /**
  * The backend refused to create a hole on purpose, as opposed to failing.
- * `client-limit` is a 429: this client is at its share of live holes or its
- * hourly budget. `full` is a 503: the deployment is at its hole ceiling. The
- * page words each differently, and neither is an outage.
+ * Three refusals, and each needs different advice:
+ * - `share` (429, no wait): this client holds its share of live holes.
+ *   Deleting one frees a slot.
+ * - `rate-limit` (429 with Retry-After): this client has created its hourly
+ *   budget. Only waiting helps; `retryAfterSeconds` says how long.
+ * - `full` (503): the deployment is at its hole ceiling.
+ * None of them is an outage.
  */
-export class HoleLimitError extends Error {
-  readonly reason: "client-limit" | "full";
+export type HoleLimitReason = "share" | "rate-limit" | "full";
 
-  constructor(reason: "client-limit" | "full") {
-    super(
-      reason === "full"
-        ? "This deployment is full."
-        : "This client is at its hole limit.",
-    );
+export class HoleLimitError extends Error {
+  readonly reason: HoleLimitReason;
+  readonly retryAfterSeconds: number | undefined;
+
+  constructor(reason: HoleLimitReason, retryAfterSeconds?: number) {
+    super(`Hole creation refused: ${reason}.`);
     this.name = "HoleLimitError";
     this.reason = reason;
+    this.retryAfterSeconds = retryAfterSeconds;
   }
 }

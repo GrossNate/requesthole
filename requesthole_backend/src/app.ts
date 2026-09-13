@@ -47,7 +47,13 @@ export default function buildApp(options: AppOptions = {}): FastifyInstance {
   fastify.register(rateLimit, { global: false });
 
   fastify.register(FastifySSEPlugin);
-  fastify.register(cors, { methods: ["GET", "POST", "DELETE"] });
+  fastify.register(cors, {
+    methods: ["GET", "POST", "DELETE"],
+    // The hourly limiter's 429 names its wait in Retry-After, and that is
+    // how the page tells it from a share refusal. Browsers hide it from a
+    // cross-origin page (the dev server) unless it is exposed.
+    exposedHeaders: ["retry-after"],
+  });
   fastify.register(
     db,
     options.databasePath !== undefined

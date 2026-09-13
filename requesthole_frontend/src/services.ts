@@ -41,10 +41,20 @@ async function addHole() {
     }
   } catch (error) {
     // Refusals are the backend working as designed, not failing: say which.
-    const status = (error as { response?: { status?: number } } | null)
-      ?.response?.status;
-    if (status === 429) throw new HoleLimitError("client-limit");
-    if (status === 503) throw new HoleLimitError("full");
+    const response = (
+      error as {
+        response?: { status?: number; headers?: Record<string, unknown> };
+      } | null
+    )?.response;
+    if (response?.status === 429) {
+      // The hourly limiter names its wait; the share refusal never does.
+      const wait = Number(response.headers?.["retry-after"]);
+      if (Number.isFinite(wait) && wait > 0) {
+        throw new HoleLimitError("rate-limit", wait);
+      }
+      throw new HoleLimitError("share");
+    }
+    if (response?.status === 503) throw new HoleLimitError("full");
     throw error;
   }
 }

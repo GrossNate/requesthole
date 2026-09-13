@@ -124,12 +124,28 @@ describe("a hole that no longer exists", () => {
 });
 
 describe("a hole creation the backend refuses", () => {
-  it("reports a 429 as a client limit", async () => {
-    vi.mocked(axios.post).mockRejectedValue({ response: { status: 429 } });
+  // Two refusals answer 429. The hourly limiter names a wait in
+  // Retry-After; the per-client share does not, since deleting a hole is
+  // what frees it, not waiting.
+  it("reports a 429 without a wait as the per-client share", async () => {
+    vi.mocked(axios.post).mockRejectedValue({
+      response: { status: 429, headers: {} },
+    });
 
     const refused = holeService.addHole();
     await expect(refused).rejects.toBeInstanceOf(HoleLimitError);
-    await expect(refused).rejects.toMatchObject({ reason: "client-limit" });
+    await expect(refused).rejects.toMatchObject({ reason: "share" });
+  });
+
+  it("reports a 429 with a wait as the hourly limit, keeping the wait", async () => {
+    vi.mocked(axios.post).mockRejectedValue({
+      response: { status: 429, headers: { "retry-after": "1800" } },
+    });
+
+    await expect(holeService.addHole()).rejects.toMatchObject({
+      reason: "rate-limit",
+      retryAfterSeconds: 1800,
+    });
   });
 
   it("reports a 503 as the deployment being full", async () => {

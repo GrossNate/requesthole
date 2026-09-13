@@ -62,7 +62,8 @@ Durable decisions that apply across all tasks.
   slow uploads, and the backend's `requestTimeout` (30s) bounds receipt of any request. `/api/`
   caps bodies at 16k (no route takes one) but has no connection cap, since SSE streams live there.
   The insert-time trim evicts by `request_id` (arrival), never by wall-clock `created`.
-  Accepted trade-offs, documented in README "Limits of the limits" rather than engineered: "one
+  Accepted trade-offs, documented in the README Configuration section (its "Limits of the limits"
+  list, plus the notes on logs and on nginx facing clients) rather than engineered: "one
   client" is one IPv4 or IPv6 /64, so a /56 holder can fill the ceiling; the share counts live
   holes, so behind shared IPv4 it can block neighbours for up to the TTL; nginx's in-flight cap is
   per exact address; the 30s deadline is fixed against a configurable body cap; client addresses

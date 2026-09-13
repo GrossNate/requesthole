@@ -298,3 +298,29 @@ live holes, so behind shared IPv4 one user can block neighbours for up to the TT
 cap is per exact address; the 30s request deadline is fixed against a configurable body cap; client
 addresses persist in access and request logs; nginx must face clients directly, now spelled out
 for the hole share too.
+
+**Review round 5 (2026-09-12) — all twelve findings fixed on request.**
+
+- **Encoded-slash gap.** `hasDotSegment` now decodes `%XX` escapes one at a time, then splits on `/`
+  and `\`, so `..%2F` and `..%5C` are dot segments as nginx sees them. Byte-wise rather than
+  `decodeURIComponent`, whose throw on a malformed escape would have needed a raw-path fallback that
+  switched the check off. (Fastify already refuses malformed escapes with 400 before routing.) Socket
+  tests cover `..%2Fapi`, `x%2F..%2F..%2Fapi`, `..%5Capi`, a malformed escape, an encoded slash that
+  is not beside a dot, and that a refused path is not charged to the capture budget. Smoke 3e sends
+  both the literal and the `..%2F` form.
+- **Two 429s, two messages.** `HoleLimitError` reasons are now `share`, `rate-limit` and `full`. The
+  hourly limiter's 429 carries `Retry-After`; the share refusal never does, and a backend test pins
+  that contract. The page tells a client at its share to delete a hole, and a client at the hourly
+  limit how long to wait. CORS exposes `retry-after`, since the dev server is cross-origin and a
+  browser hides unexposed headers from the page.
+- **Bounded client memory.** A tombstone is added only while a snapshot is pending, and all are
+  cleared when it settles: a snapshot asked for after a deletion never carries the row. The same
+  rule now bounds `streamedSince`, which also grew on a stream that never drops (pre-existing since
+  task 0006, found while fixing this). Tests show a reissued address reappears once no snapshot
+  predates its deletion.
+- The create message clears on navigation and when a hole is deleted from the list.
+- Docs: "Limits of the limits" says which trade-offs have a knob; PLAN.md's pointer covers the
+  Configuration notes too; README intro accounts for `DATABASE_PATH`; the `RETENTION_DAYS` row
+  mentions the startup sweep; the README smoke-test summary lists the resource-bound checks.
+- Tests: the backend-down create test now asserts its alert. Smoke 3f posts its oversized body to
+  `/api/holes`, which cannot create a hole if the cap ever regresses.

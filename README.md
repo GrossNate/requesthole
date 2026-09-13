@@ -12,9 +12,9 @@ A place to capture, store, and examine your HTTP requests.
 The only prerequisite is [Docker](https://docs.docker.com/get-docker/) with
 Compose v2. You don't need Node on the host, and a default deploy needs no
 configuration at all: no secrets, no separate database to provision, and no
-Nginx to set up by hand. Beyond the published port, every setting is an
-optional resource bound with a working default; see
-[Configuration](#configuration).
+Nginx to set up by hand. Beyond the published port and the `DATABASE_PATH` that
+Compose sets for you, every setting is an optional resource bound with a
+working default; see [Configuration](#configuration).
 
 From the repository root:
 
@@ -58,8 +58,9 @@ Captured data lives in that `data` volume and survives `docker compose down`.
 Run `docker compose down -v` when you want to throw it away.
 
 To exercise a deployment end to end — hole creation, request capture at the
-bare address and at a sub-path, the SSE stream, the SPA fallback, and
-persistence across a restart:
+bare address and at a sub-path, the resource bounds (body limit, deleted-hole
+404, dot-segment refusal, the `/api/` body cap), the SSE stream, the SPA
+fallback, and persistence across a restart:
 
 ```sh
 bash scripts/smoke-test.sh
@@ -131,7 +132,7 @@ does it as the first half of its build:
 | :----------------------- | :------------------ | :-------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `DATABASE_PATH`          | backend             | none — required | Path to the SQLite file. Compose sets it to `/data/requesthole.db`; the dev script sets it to `./data/requesthole.db`.                                                          |
 | `WEB_PORT`               | Compose, smoke test | `8080`          | Host port that the `nginx` service publishes.                                                                                                                                   |
-| `RETENTION_DAYS`         | backend             | `7`             | Holes older than this are deleted by an hourly sweep, along with their requests.                                                                                                |
+| `RETENTION_DAYS`         | backend             | `7`             | Holes older than this are deleted at startup and by an hourly sweep, along with their requests.                                                                                 |
 | `MAX_REQUESTS_PER_HOLE`  | backend             | `100`           | Requests kept per hole. Each capture beyond the cap evicts that hole's oldest request.                                                                                          |
 | `HOLE_CREATE_RATE_LIMIT` | backend             | `10`            | Hole creations allowed per client IP per hour; further ones get `429`.                                                                                                          |
 | `CAPTURE_RATE_LIMIT`     | backend             | `60`            | Captures allowed per client IP per minute; further ones get `429`.                                                                                                              |
@@ -172,8 +173,9 @@ proxy's forwarded address with `set_real_ip_from` (your proxy's address) and
 ### Limits of the limits
 
 These controls bound a stranger, not a determined, well-resourced one. The
-edges below are deliberate trade-offs rather than defects, and each has a knob
-if your deployment needs a different balance.
+edges below are deliberate trade-offs rather than defects. The first two can be
+rebalanced with `MAX_HOLES_PER_IP` and `MAX_HOLES`; the last two are fixed in
+`nginx.conf` and the backend, and need a code change to move.
 
 - **"One client" means one IPv4 address or one IPv6 /64.** A home IPv6
   connection is usually delegated a /56, which holds 256 /64s. Spread across 50

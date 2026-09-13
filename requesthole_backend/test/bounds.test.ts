@@ -319,6 +319,43 @@ describe("resource bounds", () => {
       expect((await createFrom(app, "10.0.0.2")).statusCode).toBe(201);
     });
 
+    // Two different refusals answer 429, and they need different advice:
+    // deleting a hole frees a share slot but does nothing for the hourly
+    // limit. The rate limiter names a wait; the share refusal does not.
+    it("tells a share refusal apart from the hourly limit", async () => {
+      const shareApp = await start({ config: generous });
+      await createFrom(shareApp, "10.0.0.1");
+      await createFrom(shareApp, "10.0.0.1");
+      const share = await createFrom(shareApp, "10.0.0.1");
+      expect(share.statusCode).toBe(429);
+      expect(share.headers["retry-after"]).toBeUndefined();
+
+      const rateApp = await start({ config: { holeCreateRateLimit: 1 } });
+      await createFrom(rateApp, "10.0.0.1");
+      const hourly = await createFrom(rateApp, "10.0.0.1");
+      expect(hourly.statusCode).toBe(429);
+      expect(hourly.headers["retry-after"]).toBeDefined();
+    });
+
+    // In development the frontend runs on another origin, and a browser
+    // hides every response header CORS does not expose.
+    it("lets a cross-origin page read the wait", async () => {
+      const app = await start({ config: { holeCreateRateLimit: 1 } });
+      const from = {
+        origin: "http://localhost:5173",
+        "x-forwarded-for": "10.0.0.1",
+      };
+      await app.inject({ method: "POST", url: "/api/hole", headers: from });
+      const hourly = await app.inject({
+        method: "POST",
+        url: "/api/hole",
+        headers: from,
+      });
+      expect(
+        String(hourly.headers["access-control-expose-headers"]).toLowerCase(),
+      ).toContain("retry-after");
+    });
+
     it("answers a client at its share with 429 even when the ceiling is full too", async () => {
       const app = await start({
         config: { holeCreateRateLimit: 100, maxHolesPerIp: 2, maxHoles: 2 },
@@ -482,7 +519,9 @@ describe("resource bounds", () => {
     // real socket, raw.
     describe("dot segments", () => {
       const rawPost = async (app: FastifyInstance, path: string) => {
-        await app.listen({ port: 0, host: "127.0.0.1" });
+        if (!app.server.listening) {
+          await app.listen({ port: 0, host: "127.0.0.1" });
+        }
         const address = app.server.address();
         const port = typeof address === "object" && address ? address.port : 0;
         return new Promise<number>((resolve, reject) => {
@@ -503,6 +542,11 @@ describe("resource bounds", () => {
         ["/HOLE/%2e%2e/api/x"],
         ["/HOLE/./x"],
         ["/HOLE/a/%2E/b"],
+        // nginx decodes %2F into a separator before resolving dot segments,
+        // so a `..` next to an encoded slash is a dot segment too.
+        ["/HOLE/..%2Fapi/x"],
+        ["/HOLE/x%2F..%2F..%2Fapi/x"],
+        ["/HOLE/..%5Capi/x"],
       ])("refuses %s without capturing it", async (template) => {
         const app = await start();
         const hole = await createHole(app);
@@ -511,6 +555,31 @@ describe("resource bounds", () => {
 
         expect(status).toBe(404);
         expect(await listRequests(app, hole)).toEqual([]);
+      });
+
+      // Fastify refuses a malformed escape before any route runs, so it can
+      // never reach the dot-segment check half-decoded.
+      it("refuses a path with a malformed escape outright", async () => {
+        const app = await start();
+        const hole = await createHole(app);
+
+        expect(await rawPost(app, `/${hole}/..%2Fapi/x%zz`)).toBe(400);
+        expect(await listRequests(app, hole)).toEqual([]);
+      });
+
+      it("does not charge a refused dot segment to the capture budget", async () => {
+        const app = await start({ config: { captureRateLimit: 1 } });
+        const hole = await createHole(app);
+
+        expect(await rawPost(app, `/${hole}/..%2Fapi/x`)).toBe(404);
+        expect(await rawPost(app, `/${hole}/real`)).toBe(200);
+      });
+
+      it("still captures an encoded slash that is not beside a dot segment", async () => {
+        const app = await start();
+        const hole = await createHole(app);
+
+        expect(await rawPost(app, `/${hole}/a%2Fb`)).toBe(200);
       });
 
       it("still captures dots that are not whole segments", async () => {

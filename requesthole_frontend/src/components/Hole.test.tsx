@@ -1273,6 +1273,59 @@ describe("Hole stream deletes", () => {
     expect(screen.queryByText("/doomed")).not.toBeInTheDocument();
   });
 
+  // A tombstone only has to outlive the snapshot that was in flight when the
+  // row went. Kept forever, the set grows with every eviction on a busy hole,
+  // and it hides any later request that is issued the same address.
+  it("shows a reissued address once no snapshot predates its deletion", async () => {
+    vi.mocked(holeService.getRequests).mockResolvedValue([capturedRequest()]);
+    renderHole();
+    await screen.findByText("/abc123");
+
+    act(() => streamDelete("req001"));
+    expect(screen.queryByText("/abc123")).not.toBeInTheDocument();
+
+    // A later snapshot, asked for after the delete: the address is live again.
+    vi.mocked(holeService.getRequests).mockResolvedValue([
+      capturedRequest({ request_path: "/reissued" }),
+    ]);
+    await act(async () => {
+      lastEventSource!.onopen!();
+    });
+
+    expect(await screen.findByText("/reissued")).toBeVisible();
+  });
+
+  it("lets a tombstone go once the snapshot it guarded against has landed", async () => {
+    vi.mocked(holeService.getRequests).mockResolvedValue([capturedRequest()]);
+    renderHole();
+    await screen.findByText("/abc123");
+
+    let resolveStale: (requests: RequestObject[]) => void = () => {};
+    vi.mocked(holeService.getRequests).mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveStale = resolve;
+      }),
+    );
+    await act(async () => {
+      lastEventSource!.onopen!();
+    });
+    act(() => streamDelete("req001"));
+    await act(async () => {
+      resolveStale([capturedRequest()]);
+    });
+    // The stale snapshot predates the delete, so its copy stays out.
+    expect(screen.queryByText("/abc123")).not.toBeInTheDocument();
+
+    vi.mocked(holeService.getRequests).mockResolvedValue([
+      capturedRequest({ request_path: "/reissued" }),
+    ]);
+    await act(async () => {
+      lastEventSource!.onopen!();
+    });
+
+    expect(await screen.findByText("/reissued")).toBeVisible();
+  });
+
   it("ignores a delete for a row it never had", async () => {
     vi.mocked(holeService.getRequests).mockResolvedValue([capturedRequest()]);
     renderHole();

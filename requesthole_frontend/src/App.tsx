@@ -3,16 +3,34 @@ import holeService from "./services";
 import Home from "./components/Home";
 import Hole from "./components/Hole";
 import { type holeObject, type LoadState } from "./types";
-import { Routes, Route, Link, useNavigate } from "react-router-dom";
+import {
+  Routes,
+  Route,
+  Link,
+  useLocation,
+  useNavigate,
+} from "react-router-dom";
 import EmptyState from "./components/EmptyState";
 import { HoleLimitError } from "./errors";
 
-// Numbers are left out on purpose: every limit is an operator setting.
+// Limits are operator settings, so the message names none of them; the only
+// number is the wait the limiter itself reports.
+const waitPhrase = (seconds: number | undefined) => {
+  if (seconds === undefined) return "later";
+  const minutes = Math.max(1, Math.ceil(seconds / 60));
+  return minutes === 1 ? "in about a minute" : `in about ${minutes} minutes`;
+};
+
 const createErrorMessage = (error: unknown) => {
   if (error instanceof HoleLimitError) {
-    return error.reason === "full"
-      ? "This RequestHole is full: it already holds as many holes as it is allowed. Try again once older holes expire."
-      : "You've reached the limit on holes from your address. Delete a hole you no longer need, or try again later.";
+    switch (error.reason) {
+      case "full":
+        return "This RequestHole is full: it already holds as many holes as it is allowed. Try again once older holes expire.";
+      case "rate-limit":
+        return `You're creating holes faster than this RequestHole allows. Try again ${waitPhrase(error.retryAfterSeconds)}.`;
+      case "share":
+        return "You've reached the limit on live holes from your address. Delete a hole you no longer need, then try again.";
+    }
   }
   return "Couldn't create a hole. The backend didn't answer. Check that it's running, then try again.";
 };
@@ -24,6 +42,17 @@ function App() {
   // list, which may have loaded perfectly well.
   const [createError, setCreateError] = useState<string | null>(null);
   const navigate = useNavigate();
+  const { pathname } = useLocation();
+
+  // A refusal describes one moment. Leaving the page, or deleting a hole to
+  // make room, changes what the next create would get, so the message goes.
+  useEffect(() => {
+    setCreateError(null);
+  }, [pathname]);
+  const setHolesAfterDelete: typeof setHoles = useCallback((update) => {
+    setCreateError(null);
+    setHoles(update);
+  }, []);
 
   const loadHoles = useCallback(() => {
     setLoadState("loading");
@@ -148,7 +177,7 @@ function App() {
             element={
               <Home
                 holes={holes}
-                setHoles={setHoles}
+                setHoles={setHolesAfterDelete}
                 createHole={createHole}
                 reloadHoles={loadHoles}
                 loadState={loadState}

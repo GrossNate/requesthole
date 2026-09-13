@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import holeService from "./services";
@@ -112,6 +112,10 @@ describe("creating a hole after a failed load", () => {
     await user.click(screen.getByRole("button", { name: /create hole/i }));
 
     expect(screen.getByText(/couldn't load your holes/i)).toBeVisible();
+    // And the click is answered: the create says it failed.
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /couldn't create a hole/i,
+    );
   });
 
   it("clears the failed state once a hole is created", async () => {
@@ -160,7 +164,7 @@ describe("a hole creation that is refused", () => {
   it("keeps the list and says a limit was hit", async () => {
     const user = userEvent.setup();
     vi.mocked(holeService.addHole).mockRejectedValue(
-      new HoleLimitError("client-limit"),
+      new HoleLimitError("share"),
     );
     await renderLoaded();
 
@@ -171,6 +175,71 @@ describe("a hole creation that is refused", () => {
     expect(
       screen.queryByText(/couldn't load your holes/i),
     ).not.toBeInTheDocument();
+  });
+
+  it("tells a client at its share to delete a hole", async () => {
+    const user = userEvent.setup();
+    vi.mocked(holeService.addHole).mockRejectedValue(
+      new HoleLimitError("share"),
+    );
+    await renderLoaded();
+
+    await user.click(screen.getByRole("button", { name: /create hole/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/delete/i);
+  });
+
+  // Deleting frees nothing against the hourly limit, so the page must not
+  // send the reader off to delete holes; it says how long to wait instead.
+  it("tells a client at the hourly limit to wait, not to delete", async () => {
+    const user = userEvent.setup();
+    vi.mocked(holeService.addHole).mockRejectedValue(
+      new HoleLimitError("rate-limit", 1800),
+    );
+    await renderLoaded();
+
+    await user.click(screen.getByRole("button", { name: /create hole/i }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/30 minutes/i);
+    expect(alert).not.toHaveTextContent(/delete/i);
+  });
+
+  // The refusal describes a moment. Once the reader acts on it, or leaves,
+  // it is no longer true, and a stale "you're at the limit" is misleading.
+  it("drops the message once the reader deletes a hole", async () => {
+    const user = userEvent.setup();
+    vi.mocked(holeService.addHole).mockRejectedValue(
+      new HoleLimitError("share"),
+    );
+    vi.mocked(holeService.deleteHole).mockResolvedValue(true);
+    await renderLoaded();
+    await user.click(screen.getByRole("button", { name: /create hole/i }));
+    await screen.findByRole("alert");
+
+    await user.click(screen.getByRole("button", { name: /delete/i }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
+    );
+  });
+
+  it("drops the message once the reader leaves the page", async () => {
+    const user = userEvent.setup();
+    vi.mocked(holeService.addHole).mockRejectedValue(
+      new HoleLimitError("share"),
+    );
+    await renderLoaded();
+    await user.click(screen.getByRole("button", { name: /create hole/i }));
+    await screen.findByRole("alert");
+
+    await user.click(
+      within(screen.getByRole("table")).getByRole("link", { name: "abc123" }),
+    );
+    await screen.findByRole("heading", { level: 1, name: /Hole abc123/i });
+    await user.click(screen.getByRole("link", { name: "Home" }));
+
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("says the deployment is full when the ceiling refuses it", async () => {
@@ -202,7 +271,7 @@ describe("a hole creation that is refused", () => {
   it("clears the message once a create succeeds", async () => {
     const user = userEvent.setup();
     vi.mocked(holeService.addHole)
-      .mockRejectedValueOnce(new HoleLimitError("client-limit"))
+      .mockRejectedValueOnce(new HoleLimitError("share"))
       .mockResolvedValueOnce([{ hole_address: "zzz999" }]);
     await renderLoaded();
 

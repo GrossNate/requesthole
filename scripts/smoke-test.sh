@@ -181,29 +181,33 @@ else
   fail "deleted-hole check — could not create a hole"
 fi
 
-# 3e) A dot-segment path is refused. nginx normalizes `/addr/../api/x` to pick
-#     its /api/ location but forwards the raw path; unrefused, it would land in
-#     the hole around every upload cap on the collect location.
+# 3e) Dot-segment paths are refused. nginx normalizes `/addr/../api/x` (and
+#     `/addr/..%2Fapi/x`, decoding the slash first) to pick its /api/
+#     location but forwards the raw path; unrefused, it would land in the
+#     hole around every upload cap on the collect location.
 if [ -n "$addr" ]; then
-  before=$(curl -s "${BASE}/api/hole/${addr}/requests" | grep -o '"request_address"' | wc -l)
-  dot_code=$(curl -s --path-as-is -o /dev/null -w '%{http_code}' -X POST "${BASE}/${addr}/../api/x" --data 'x')
-  after=$(curl -s "${BASE}/api/hole/${addr}/requests" | grep -o '"request_address"' | wc -l)
-  if [ "$dot_code" = "404" ] && [ "$before" -eq "$after" ]; then
-    pass "POST /${addr}/../api/x refused (404), nothing captured"
-  else
-    fail "POST /${addr}/../api/x -> ${dot_code}, captures ${before} -> ${after}"
-  fi
+  for dot_path in "/${addr}/../api/x" "/${addr}/..%2Fapi/x"; do
+    before=$(curl -s "${BASE}/api/hole/${addr}/requests" | grep -o '"request_address"' | wc -l)
+    dot_code=$(curl -s --path-as-is -o /dev/null -w '%{http_code}' -X POST "${BASE}${dot_path}" --data 'x')
+    after=$(curl -s "${BASE}/api/hole/${addr}/requests" | grep -o '"request_address"' | wc -l)
+    if [ "$dot_code" = "404" ] && [ "$before" -eq "$after" ]; then
+      pass "POST ${dot_path} refused (404), nothing captured"
+    else
+      fail "POST ${dot_path} -> ${dot_code}, captures ${before} -> ${after}"
+    fi
+  done
 else
   fail "dot-segment check — skipped, no address"
 fi
 
-# 3f) nginx caps bodies on /api/*, where no route takes one.
+# 3f) nginx caps bodies on /api/*, where no route takes one. Sent to a route
+#     that cannot create anything, so a regressed cap leaves nothing behind.
 api_body_code=$(head -c 32768 /dev/zero | tr '\0' 'x' | curl -s -o /dev/null -w '%{http_code}' \
-  -X POST "${BASE}/api/hole" -H 'Content-Type: text/plain' --data-binary @-)
+  -X POST "${BASE}/api/holes" -H 'Content-Type: text/plain' --data-binary @-)
 if [ "$api_body_code" = "413" ]; then
-  pass "32 KiB body to /api/hole -> 413 at nginx"
+  pass "32 KiB body to /api/holes -> 413 at nginx"
 else
-  fail "32 KiB body to /api/hole -> ${api_body_code} (expected 413)"
+  fail "32 KiB body to /api/holes -> ${api_body_code} (expected 413)"
 fi
 
 # 4) Root serves the SPA index.html.
