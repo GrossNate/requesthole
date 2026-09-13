@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import axios, { type AxiosProgressEvent } from "axios";
 import holeService from "./services";
-import { HoleGoneError } from "./errors";
+import { HoleGoneError, HoleLimitError } from "./errors";
 
 vi.mock("axios", () => ({
   default: { get: vi.fn(), post: vi.fn(), delete: vi.fn() },
@@ -120,5 +120,31 @@ describe("a hole that no longer exists", () => {
     const failure = holeService.getRequests("abc123");
     await expect(failure).rejects.toBeDefined();
     await expect(failure).rejects.not.toBeInstanceOf(HoleGoneError);
+  });
+});
+
+describe("a hole creation the backend refuses", () => {
+  it("reports a 429 as a client limit", async () => {
+    vi.mocked(axios.post).mockRejectedValue({ response: { status: 429 } });
+
+    const refused = holeService.addHole();
+    await expect(refused).rejects.toBeInstanceOf(HoleLimitError);
+    await expect(refused).rejects.toMatchObject({ reason: "client-limit" });
+  });
+
+  it("reports a 503 as the deployment being full", async () => {
+    vi.mocked(axios.post).mockRejectedValue({ response: { status: 503 } });
+
+    await expect(holeService.addHole()).rejects.toMatchObject({
+      reason: "full",
+    });
+  });
+
+  it("still reports any other failure as a plain failure", async () => {
+    vi.mocked(axios.post).mockRejectedValue({ response: { status: 500 } });
+
+    await expect(holeService.addHole()).rejects.not.toBeInstanceOf(
+      HoleLimitError,
+    );
   });
 });

@@ -151,17 +151,51 @@ unbuffered, so `MAX_BODY_BYTES` is the one place the limit lives and an
 oversized upload is cut off at the limit rather than spooled to disk first.
 Nginx allows each client ten capture uploads in flight at once, and the backend
 gives any request 30 seconds to arrive in full, so a slow upload cannot hold a
-connection open indefinitely.
+connection open indefinitely. The API routes take no bodies, so Nginx caps
+anything sent to `/api/` at 16 KiB.
 
 To count each client's share, the backend records the address that created
-each hole. No route ever returns it, and it is deleted along with the hole.
+each hole. No route ever returns it, and the database copy is deleted along with
+the hole. Client addresses still appear in the Nginx access log and the
+backend's request log, and those are kept for as long as your log retention
+keeps them.
 
-If you put another proxy in front of this stack, such as a TLS terminator or a
-load balancer, Nginx sees that proxy's address for every visitor, and the
-per-client limits collapse into one bucket that everyone shares. Tell Nginx to
-trust the proxy's forwarded address with `set_real_ip_from` (your proxy's
-address) and `real_ip_header X-Forwarded-For`, so `$remote_addr` is the real
-client again.
+Nginx has to face clients directly. If you put another proxy in front of this
+stack, such as a TLS terminator or a load balancer, Nginx sees that proxy's
+address for every visitor, and every per-client limit collapses into one bucket
+that everyone shares. That includes the hole share, which is stored with each
+hole: the 21st hole anyone creates would lock out hole creation for everyone
+until holes are deleted or swept, restarts included. Tell Nginx to trust the
+proxy's forwarded address with `set_real_ip_from` (your proxy's address) and
+`real_ip_header X-Forwarded-For`, so `$remote_addr` is the real client again.
+
+### Limits of the limits
+
+These controls bound a stranger, not a determined, well-resourced one. The
+edges below are deliberate trade-offs rather than defects, and each has a knob
+if your deployment needs a different balance.
+
+- **"One client" means one IPv4 address or one IPv6 /64.** A home IPv6
+  connection is usually delegated a /56, which holds 256 /64s. Spread across 50
+  of them at the default share of 20, one subscriber can fill the default
+  ceiling of 1000 holes in about two hours, after which everyone else's
+  creations get `503` until holes expire. Lower `MAX_HOLES_PER_IP` or raise
+  `MAX_HOLES` if that matters to you.
+- **The hole share lasts as long as the holes do.** It counts live holes, not
+  recent creations, so it frees up only as holes are deleted or swept. Behind
+  a shared IPv4 address, such as carrier-grade NAT or an office network, one
+  user who holds the whole share blocks their neighbours from creating holes
+  for up to `RETENTION_DAYS`. Nobody can see whose holes count against the
+  address, because the creator is never shown.
+- **Nginx counts in-flight uploads per exact address.** For IPv6 that is each
+  /128, so a client rotating addresses within its /64 gets past the cap of ten.
+  The backend still bounds a /64 through `CAPTURE_RATE_LIMIT` and the 30-second
+  request deadline, so the in-flight ceiling for a /64 is at most
+  `CAPTURE_RATE_LIMIT` uploads, not ten.
+- **The 30-second request deadline is fixed.** A body has to arrive within it,
+  so raising `MAX_BODY_BYTES` also raises the upload speed a sender needs.
+  At the default 1 MiB that is about 35 KB/s. At 50 MB it is about 1.7 MB/s,
+  and slower senders get `408`.
 
 This is a public, use-at-your-own-risk deployment model: there are no accounts,
 every hole is listed on the home page, and anyone who knows an address can read
@@ -182,8 +216,8 @@ do not add access control.
 | GET     | `/api/hole/:hole_address`              | get hole info                                               |
 | POST    | `/api/hole`                            | create a new hole                                           |
 | DELETE  | `/api/hole/:hole_address`              | delete a hole                                               |
-| GET     | `/api/hole/:hole_address/requests`     | get all requests for a hole                                 |
-| GET     | `/api/hole/:hole_address/events`       | SSE stream of requests as they arrive                       |
+| GET     | `/api/hole/:hole_address/requests`     | get all requests for a hole; `404` once the hole is gone    |
+| GET     | `/api/hole/:hole_address/events`       | SSE stream: captures, `delete` and `hole-deleted` frames    |
 | GET     | `/api/request/:request_address`        | get specific request                                        |
 | GET     | `/api/request/:request_address/body`   | get a request's raw body                                    |
 | DELETE  | `/api/request/:request_address`        | delete specific request                                     |
@@ -195,4 +229,11 @@ A malformed bare address (`/abc12`) answers `400`, as it always has. An unknown
 path with more than one segment (`/api/nope/x`) answers `404`: it reaches the
 sub-path route only because nothing else matched, so it is a path that does not
 exist rather than a bad address. Neither counts against the capture rate
-limit.
+limit. A path with a `.` or `..` segment, raw or percent-encoded, answers `404`
+and is never captured.
+
+A hole's requests endpoint answers `[]` for a hole with nothing in it and `404`
+for a hole that has been deleted or swept, so a viewer that reconnects can tell
+the two apart. The events stream carries three kinds of frame: an unnamed frame
+for each capture, a `delete` frame when a request is deleted or evicted by the
+per-hole cap, and one `hole-deleted` frame when the hole itself goes.

@@ -10,3 +10,23 @@ export class HoleGoneError extends Error {
     this.name = "HoleGoneError";
   }
 }
+
+/**
+ * The backend refused to create a hole on purpose, as opposed to failing.
+ * `client-limit` is a 429: this client is at its share of live holes or its
+ * hourly budget. `full` is a 503: the deployment is at its hole ceiling. The
+ * page words each differently, and neither is an outage.
+ */
+export class HoleLimitError extends Error {
+  readonly reason: "client-limit" | "full";
+
+  constructor(reason: "client-limit" | "full") {
+    super(
+      reason === "full"
+        ? "This deployment is full."
+        : "This client is at its hole limit.",
+    );
+    this.name = "HoleLimitError";
+    this.reason = reason;
+  }
+}

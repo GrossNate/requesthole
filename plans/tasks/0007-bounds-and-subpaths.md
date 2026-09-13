@@ -270,3 +270,31 @@ chose the recommended option for both.
   The `trustProxy` comments say nginx replaces the header. Superseded log bullets are marked.
 - Tests: a malformed bare address is shown not to count against the capture budget. The address
   regex compiles once.
+
+**Review round 4 (2026-09-12) — the user chose: fix the major and the straightforward findings,
+document the trade-offs.**
+
+- **Major: create refusals read as an outage.** `addHole` now maps 429 and 503 to
+  `HoleLimitError` (`client-limit` / `full`, in `src/errors.ts`). `App` keeps a `createError` apart
+  from `loadState`, so a refused or failed create leaves a loaded list alone; `Home` shows the
+  message as a `role="alert"` beside the create button. Messages carry no numbers, since every
+  limit is an operator setting.
+- Trim evicts by `request_id` alone (arrival order), not wall-clock `created`: a clock stepping
+  back could otherwise evict the capture just stored. Test backdates rows to the future.
+- Dot segments: the collect `onRequest` hook refuses any `.`/`..` segment, raw or percent-encoded,
+  with 404 before the limiter. Tested over a real socket, since `inject` normalizes paths. nginx
+  `/api/` gets `client_max_body_size 16k` and `client_body_timeout 10s`; deliberately no
+  `limit_conn` there, since every open hole view holds an SSE stream on `/api/`.
+- Smoke test deletes its hole on exit, so repeated runs no longer eat the host's share; new checks
+  for the dot-segment refusal and the `/api/` body cap.
+- Tests added: share-before-ceiling precedence (429 over 503); a pending snapshot retry dropped when
+  the hole goes; the snapshot-404 path closing the stream.
+- Stale docs fixed: PLAN.md Backend bullet lists all three frames; `onDelete`/`dropRequest` and the
+  retention comments match round 3; README route table notes the 404 and the frames.
+
+Documented, not engineered (README "Limits of the limits", PLAN.md Resource bounds): "one client"
+is one IPv4 or IPv6 /64, so a /56 holder can fill the ceiling in about two hours; the share counts
+live holes, so behind shared IPv4 one user can block neighbours for up to the TTL; nginx's in-flight
+cap is per exact address; the 30s request deadline is fixed against a configurable body cap; client
+addresses persist in access and request logs; nginx must face clients directly, now spelled out
+for the hole share too.

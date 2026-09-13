@@ -336,7 +336,8 @@ const HoleView = ({
   }, [loadRequests]);
 
   // One exit for a row, whoever took it: the reader's own delete, or the
-  // server's word that another tab, the hole's cap, or retention did. The
+  // server's word that another tab or the hole's cap did. (Retention takes
+  // the whole hole, which is `markGone`, not this.) The
   // tombstone outlives the row so no in-flight snapshot can put it back
   // (the merge filters `streamedSince` through the same set).
   const dropRequest = useCallback(

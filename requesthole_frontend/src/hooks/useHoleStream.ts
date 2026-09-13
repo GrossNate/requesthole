@@ -34,8 +34,9 @@ export type HoleStreamOptions = {
   onMessage: (data: string) => void;
   /**
    * Called with the payload of a `delete` frame — the server's word that a
-   * request is gone, whether a user removed it, the hole's cap evicted it, or
-   * retention swept it. Its own channel, since the default one carries rows.
+   * request is gone, because a user removed it or the hole's cap evicted it.
+   * Its own channel, since the default one carries rows. A whole hole going
+   * (deleted, or swept by retention) arrives on `onHoleDeleted` instead.
    */
   onDelete?: (data: string) => void;
   /**

@@ -11,6 +11,8 @@
 #   * an over-limit body         -> 413 from the backend, not from nginx,
 #                                   and never spooled to nginx's disk
 #   * a deleted hole's requests  -> 404, not an empty list
+#   * a `..` path via /api/      -> refused, not captured
+#   * a body sent to /api/*      -> capped by nginx at 16k
 #   * GET  /                    -> serves the SPA index.html
 #   * a hashed static asset      -> loads with 200
 #   * GET /api/hole/:addr/events -> streams a `data:` SSE event on capture
@@ -46,6 +48,12 @@ pass() { printf '  \033[32mPASS\033[0m %s\n' "$1"; PASS=$((PASS + 1)); }
 fail() { printf '  \033[31mFAIL\033[0m %s\n' "$1"; FAIL=$((FAIL + 1)); }
 
 cleanup() {
+  # Leave nothing behind on the persistent volume. Every hole this run made
+  # counts against this host's per-client share (MAX_HOLES_PER_IP) until the
+  # retention sweep, so a kept hole per run would fail the run after ~20.
+  if [ -n "${addr:-}" ]; then
+    curl -s -o /dev/null -X DELETE "${BASE}/api/hole/${addr}" || true
+  fi
   if [ "$DO_DOWN" -eq 1 ]; then
     echo "--- tearing down stack ---"
     docker compose down
@@ -171,6 +179,31 @@ if [ -n "$doomed" ]; then
   fi
 else
   fail "deleted-hole check — could not create a hole"
+fi
+
+# 3e) A dot-segment path is refused. nginx normalizes `/addr/../api/x` to pick
+#     its /api/ location but forwards the raw path; unrefused, it would land in
+#     the hole around every upload cap on the collect location.
+if [ -n "$addr" ]; then
+  before=$(curl -s "${BASE}/api/hole/${addr}/requests" | grep -o '"request_address"' | wc -l)
+  dot_code=$(curl -s --path-as-is -o /dev/null -w '%{http_code}' -X POST "${BASE}/${addr}/../api/x" --data 'x')
+  after=$(curl -s "${BASE}/api/hole/${addr}/requests" | grep -o '"request_address"' | wc -l)
+  if [ "$dot_code" = "404" ] && [ "$before" -eq "$after" ]; then
+    pass "POST /${addr}/../api/x refused (404), nothing captured"
+  else
+    fail "POST /${addr}/../api/x -> ${dot_code}, captures ${before} -> ${after}"
+  fi
+else
+  fail "dot-segment check — skipped, no address"
+fi
+
+# 3f) nginx caps bodies on /api/*, where no route takes one.
+api_body_code=$(head -c 32768 /dev/zero | tr '\0' 'x' | curl -s -o /dev/null -w '%{http_code}' \
+  -X POST "${BASE}/api/hole" -H 'Content-Type: text/plain' --data-binary @-)
+if [ "$api_body_code" = "413" ]; then
+  pass "32 KiB body to /api/hole -> 413 at nginx"
+else
+  fail "32 KiB body to /api/hole -> ${api_body_code} (expected 413)"
 fi
 
 # 4) Root serves the SPA index.html.

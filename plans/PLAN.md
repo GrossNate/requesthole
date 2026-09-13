@@ -26,8 +26,9 @@ Durable decisions that apply across all tasks.
 - **Backend**: Node 24, Fastify 5, TypeScript. Routes under `/api/*`; root-level collect routes
   `fastify.all("/:hole_address")` and `fastify.all("/:hole_address/*")` capture any method to a
   fixed 6-char alphanumeric address and any sub-path beneath it (task 0007), storing the full URL
-  in `request_path`. SSE stream at `/api/hole/:hole_address/events`, carrying capture frames and
-  named `delete` frames.
+  in `request_path`; a path with a `.`/`..` segment is refused with 404. SSE stream at
+  `/api/hole/:hole_address/events`, carrying capture frames, named `delete` frames (request delete,
+  cap eviction), and one `hole-deleted` frame when the hole itself goes.
 - **Frontend**: Vite + React 19 + Tailwind/daisyUI, built to static assets. Single-origin in
   production — `services.ts` sets `BASE_URL=""` for prod builds, so the app calls `/api/*` on its
   own origin. Client routes: `/`, `/view/:hole_address`, `/view/:hole_address/:request_address`.
@@ -58,7 +59,14 @@ Durable decisions that apply across all tasks.
   gone from empty. Nginx collect sets `client_max_body_size 0` with `proxy_request_buffering off`,
   so bodies stream to the backend's 413 instead of spooling to nginx's disk and `MAX_BODY_BYTES` is
   the single body-size authority; `limit_conn` 10 per client and `client_body_timeout 10s` cap
-  slow uploads, and the backend's `requestTimeout` (30s) bounds receipt of any request.
+  slow uploads, and the backend's `requestTimeout` (30s) bounds receipt of any request. `/api/`
+  caps bodies at 16k (no route takes one) but has no connection cap, since SSE streams live there.
+  The insert-time trim evicts by `request_id` (arrival), never by wall-clock `created`.
+  Accepted trade-offs, documented in README "Limits of the limits" rather than engineered: "one
+  client" is one IPv4 or IPv6 /64, so a /56 holder can fill the ceiling; the share counts live
+  holes, so behind shared IPv4 it can block neighbours for up to the TTL; nginx's in-flight cap is
+  per exact address; the 30s deadline is fixed against a configurable body cap; client addresses
+  persist in access and request logs. Nginx must face clients directly.
 - **Untrusted bodies**: captured request bodies are attacker-controlled and must never execute on
   this origin. The body endpoint serves them with `x-content-type-options: nosniff` and
   `content-disposition: attachment`; the viewer fetches bytes and renders them as escaped text, never

@@ -61,6 +61,26 @@ describe("resource bounds", () => {
       }
     });
 
+    // `created` is wall-clock time. If the clock steps back, the newest
+    // capture carries the oldest timestamp, and a trim ordered by it would
+    // evict the row it just stored while the sender got a 200.
+    it("evicts by arrival order, even when the clock steps back", async () => {
+      const app = await start({ config: { maxRequestsPerHole: 2 } });
+      const hole = await createHole(app);
+      await app.inject({ method: "POST", url: `/${hole}?n=1` });
+      await app.inject({ method: "POST", url: `/${hole}?n=2` });
+      // The stored rows now look like they came from the future.
+      app.db
+        .prepare("UPDATE requests SET created = '2999-01-01T00:00:00.000Z'")
+        .run();
+
+      await app.inject({ method: "POST", url: `/${hole}?n=3` });
+
+      expect(
+        (await listRequests(app, hole)).map((r) => r.request_path).sort(),
+      ).toEqual([`/${hole}?n=2`, `/${hole}?n=3`]);
+    });
+
     it("leaves other holes alone", async () => {
       const app = await start({ config: { maxRequestsPerHole: 1 } });
       const quiet = await createHole(app);
@@ -299,6 +319,17 @@ describe("resource bounds", () => {
       expect((await createFrom(app, "10.0.0.2")).statusCode).toBe(201);
     });
 
+    it("answers a client at its share with 429 even when the ceiling is full too", async () => {
+      const app = await start({
+        config: { holeCreateRateLimit: 100, maxHolesPerIp: 2, maxHoles: 2 },
+      });
+      await createFrom(app, "10.0.0.1");
+      await createFrom(app, "10.0.0.1");
+      // Both limits are hit: the one that names this client wins.
+      expect((await createFrom(app, "10.0.0.1")).statusCode).toBe(429);
+      expect((await createFrom(app, "10.0.0.2")).statusCode).toBe(503);
+    });
+
     it("gives a client its share back when one of its holes goes", async () => {
       const app = await start({ config: generous });
       const first = (await createFrom(app, "10.0.0.1")).json<
@@ -442,6 +473,57 @@ describe("resource bounds", () => {
       const app = await start();
       const response = await app.inject({ method: "POST", url: "/abcde" });
       expect(response.statusCode).toBe(400);
+    });
+
+    // nginx normalizes `/abc123/../api/x` to `/api/x` to pick a location, but
+    // forwards the raw path, which Fastify does not normalize. That landed in
+    // this hole through the `/api/` location, around every upload cap on the
+    // collect location. `inject` normalizes paths itself, so these go over a
+    // real socket, raw.
+    describe("dot segments", () => {
+      const rawPost = async (app: FastifyInstance, path: string) => {
+        await app.listen({ port: 0, host: "127.0.0.1" });
+        const address = app.server.address();
+        const port = typeof address === "object" && address ? address.port : 0;
+        return new Promise<number>((resolve, reject) => {
+          const req = http.request(
+            { host: "127.0.0.1", port, path, method: "POST" },
+            (res) => {
+              res.resume();
+              resolve(res.statusCode ?? 0);
+            },
+          );
+          req.on("error", reject);
+          req.end("x");
+        });
+      };
+
+      it.each([
+        ["/HOLE/../api/x"],
+        ["/HOLE/%2e%2e/api/x"],
+        ["/HOLE/./x"],
+        ["/HOLE/a/%2E/b"],
+      ])("refuses %s without capturing it", async (template) => {
+        const app = await start();
+        const hole = await createHole(app);
+
+        const status = await rawPost(app, template.replace("HOLE", hole));
+
+        expect(status).toBe(404);
+        expect(await listRequests(app, hole)).toEqual([]);
+      });
+
+      it("still captures dots that are not whole segments", async () => {
+        const app = await start();
+        const hole = await createHole(app);
+
+        const status = await rawPost(app, `/${hole}/v1.2/a..b/.well-known`);
+
+        expect(status).toBe(200);
+        expect(
+          (await listRequests(app, hole)).map((r) => r.request_path),
+        ).toEqual([`/${hole}/v1.2/a..b/.well-known`]);
+      });
     });
 
     it("does not swallow /api paths", async () => {

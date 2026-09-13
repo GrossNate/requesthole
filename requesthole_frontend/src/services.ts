@@ -1,5 +1,5 @@
 import axios from "axios";
-import { HoleGoneError } from "./errors";
+import { HoleGoneError, HoleLimitError } from "./errors";
 import type { RequestObject } from "./types";
 import { isAddress } from "./utils/address";
 
@@ -32,11 +32,20 @@ function addressPath(address: string): string {
 }
 
 async function addHole() {
-  const response = await axios.post(`${BASE_URL}/api/hole`);
-  if (response.status === 201) {
-    return response.data;
-  } else {
-    throw new Error(`Failed to create hole. Status: ${response.status}`);
+  try {
+    const response = await axios.post(`${BASE_URL}/api/hole`);
+    if (response.status === 201) {
+      return response.data;
+    } else {
+      throw new Error(`Failed to create hole. Status: ${response.status}`);
+    }
+  } catch (error) {
+    // Refusals are the backend working as designed, not failing: say which.
+    const status = (error as { response?: { status?: number } } | null)
+      ?.response?.status;
+    if (status === 429) throw new HoleLimitError("client-limit");
+    if (status === 503) throw new HoleLimitError("full");
+    throw error;
   }
 }
 

@@ -5,10 +5,24 @@ import Hole from "./components/Hole";
 import { type holeObject, type LoadState } from "./types";
 import { Routes, Route, Link, useNavigate } from "react-router-dom";
 import EmptyState from "./components/EmptyState";
+import { HoleLimitError } from "./errors";
+
+// Numbers are left out on purpose: every limit is an operator setting.
+const createErrorMessage = (error: unknown) => {
+  if (error instanceof HoleLimitError) {
+    return error.reason === "full"
+      ? "This RequestHole is full: it already holds as many holes as it is allowed. Try again once older holes expire."
+      : "You've reached the limit on holes from your address. Delete a hole you no longer need, or try again later.";
+  }
+  return "Couldn't create a hole. The backend didn't answer. Check that it's running, then try again.";
+};
 
 function App() {
   const [holes, setHoles] = useState<holeObject[]>([]);
   const [loadState, setLoadState] = useState<LoadState>("loading");
+  // Kept apart from `loadState`: a create that fails says nothing about the
+  // list, which may have loaded perfectly well.
+  const [createError, setCreateError] = useState<string | null>(null);
   const navigate = useNavigate();
 
   const loadHoles = useCallback(() => {
@@ -33,6 +47,7 @@ function App() {
     // Reachable from the failed-load panel, so the backend may well still be
     // down. Without the catch the rejection went nowhere and the button read
     // as doing nothing at all.
+    setCreateError(null);
     try {
       const result = await holeService.addHole();
       setHoles((prevHoles) => [
@@ -45,7 +60,10 @@ function App() {
       navigate(`/view/${result[0].hole_address}`);
     } catch (error) {
       console.error(error);
-      setLoadState("failed");
+      // The list is exactly as it was. A refusal (429, 503) is the backend
+      // enforcing a limit, and even a real failure here says nothing about
+      // holes that already loaded; the message says which it was.
+      setCreateError(createErrorMessage(error));
     }
   };
 
@@ -134,6 +152,7 @@ function App() {
                 createHole={createHole}
                 reloadHoles={loadHoles}
                 loadState={loadState}
+                createError={createError}
               />
             }
           />

@@ -17,6 +17,7 @@ const renderHome = (
         createHole={vi.fn()}
         reloadHoles={vi.fn()}
         loadState={loadState}
+        createError={null}
       />
     </MemoryRouter>,
   );
@@ -62,6 +63,7 @@ describe("Home", () => {
           createHole={createHole}
           reloadHoles={reloadHoles}
           loadState="failed"
+          createError={null}
         />
       </MemoryRouter>,
     );

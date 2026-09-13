@@ -24,6 +24,17 @@ const ADDRESS_PATTERN = "^[a-zA-Z0-9]{6}$";
 const ADDRESS = new RegExp(ADDRESS_PATTERN);
 const isAddress = (value: string) => ADDRESS.test(value);
 
+const hasDotSegment = (url: string) =>
+  (url.split("?", 1)[0] ?? "").split("/").some((segment) => {
+    let decoded = segment;
+    try {
+      decoded = decodeURIComponent(segment);
+    } catch {
+      // Malformed escapes are left as they came; they are not dot segments.
+    }
+    return decoded === "." || decoded === "..";
+  });
+
 const params: JSONSchemaType<HoleParams> = {
   type: "object",
   properties: {
@@ -63,15 +74,17 @@ function routesWrapper(
     );
     // Trims the hole back to its cap right after every capture, in the same
     // transaction as the insert, so the table is bounded continuously rather
-    // than between sweeps. Oldest first by insertion order; the millisecond
-    // `created` default can tie, so the primary key breaks the tie.
+    // than between sweeps. Oldest first by arrival, which is the primary key:
+    // `created` is wall-clock time, and a clock stepping back would make the
+    // newest capture look oldest and evict it in the transaction that stored
+    // it, while the sender got a 200.
     const trimHole = fastify.db.prepare(
       `
         DELETE FROM requests
         WHERE request_id IN (
           SELECT request_id FROM requests
           WHERE hole_id = ?
-          ORDER BY created DESC, request_id DESC
+          ORDER BY request_id DESC
           LIMIT -1 OFFSET ?
         )
         RETURNING request_address`,
@@ -169,6 +182,16 @@ function routesWrapper(
       RawReplyDefaultExpression,
       { Params: HoleParams }
     > = (request, reply, done) => {
+      // A `.` or `..` segment, raw or percent-encoded, is never a capture.
+      // nginx normalizes `/abc123/../api/x` to `/api/x` to choose a location,
+      // then forwards the raw path, which Fastify does not normalize: such a
+      // request would land in this hole by way of nginx's `/api/` location,
+      // around every upload cap on the collect location.
+      if (hasDotSegment(request.url)) {
+        reply.code(404);
+        reply.send();
+        return;
+      }
       if (!isAddress(request.params.hole_address)) {
         done();
         return;

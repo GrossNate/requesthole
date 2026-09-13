@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import holeService from "./services";
 import App from "./App";
+import { HoleLimitError } from "./errors";
 
 vi.mock("./services", () => ({
   default: {
@@ -136,5 +137,81 @@ describe("creating a hole after a failed load", () => {
       screen.queryByText(/couldn't load your holes/i),
     ).not.toBeInTheDocument();
     expect(screen.getByRole("table")).toBeInTheDocument();
+  });
+});
+
+// Creating can now be refused on purpose: a client at its share of live holes
+// or its hourly budget gets 429, and a deployment at its ceiling gets 503. A
+// refusal used to land in the same catch as an outage, which swapped a list
+// that loaded fine for "The backend didn't answer".
+describe("a hole creation that is refused", () => {
+  const renderLoaded = async () => {
+    vi.mocked(holeService.getHoles).mockResolvedValue([
+      { hole_address: "abc123" },
+    ]);
+    render(
+      <MemoryRouter>
+        <App />
+      </MemoryRouter>,
+    );
+    await screen.findByRole("table");
+  };
+
+  it("keeps the list and says a limit was hit", async () => {
+    const user = userEvent.setup();
+    vi.mocked(holeService.addHole).mockRejectedValue(
+      new HoleLimitError("client-limit"),
+    );
+    await renderLoaded();
+
+    await user.click(screen.getByRole("button", { name: /create hole/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/limit/i);
+    expect(screen.getByRole("table")).toBeVisible();
+    expect(
+      screen.queryByText(/couldn't load your holes/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("says the deployment is full when the ceiling refuses it", async () => {
+    const user = userEvent.setup();
+    vi.mocked(holeService.addHole).mockRejectedValue(
+      new HoleLimitError("full"),
+    );
+    await renderLoaded();
+
+    await user.click(screen.getByRole("button", { name: /create hole/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/full/i);
+    expect(screen.getByRole("table")).toBeVisible();
+  });
+
+  it("says the create failed, without hiding the list, when the backend is down", async () => {
+    const user = userEvent.setup();
+    vi.mocked(holeService.addHole).mockRejectedValue(new Error("offline"));
+    await renderLoaded();
+
+    await user.click(screen.getByRole("button", { name: /create hole/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /couldn't create a hole/i,
+    );
+    expect(screen.getByRole("table")).toBeVisible();
+  });
+
+  it("clears the message once a create succeeds", async () => {
+    const user = userEvent.setup();
+    vi.mocked(holeService.addHole)
+      .mockRejectedValueOnce(new HoleLimitError("client-limit"))
+      .mockResolvedValueOnce([{ hole_address: "zzz999" }]);
+    await renderLoaded();
+
+    await user.click(screen.getByRole("button", { name: /create hole/i }));
+    await screen.findByRole("alert");
+    await user.click(screen.getByRole("button", { name: /create hole/i }));
+    await screen.findByRole("heading", { level: 1, name: /Hole zzz999/i });
+    await user.click(screen.getByRole("link", { name: "Home" }));
+
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

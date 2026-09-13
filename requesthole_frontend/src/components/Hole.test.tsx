@@ -1334,6 +1334,25 @@ describe("Hole that no longer exists", () => {
       vi.advanceTimersByTime(60_000);
     });
     expect(holeService.getRequests).toHaveBeenCalledTimes(1);
+    // Terminal on this path too: nothing left on the stream to follow.
+    expect(lastEventSource!.close).toHaveBeenCalled();
+  });
+
+  // A failed snapshot schedules a retry. If the hole goes before it fires,
+  // the retry must not ask after a hole that no longer exists.
+  it("drops a pending snapshot retry when the hole goes", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.mocked(holeService.getRequests).mockRejectedValue(new Error("offline"));
+    renderHole();
+    await screen.findByText(/couldn't load this hole's requests/i);
+
+    act(() => streamHoleDeleted("abc123"));
+    await act(async () => {
+      vi.advanceTimersByTime(60_000);
+    });
+
+    expect(holeService.getRequests).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/no longer exists/i)).toBeVisible();
   });
 });
 
