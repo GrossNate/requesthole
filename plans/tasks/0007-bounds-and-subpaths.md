@@ -336,3 +336,14 @@ twelve fixes and found three nits in them:
   and see it, and leaving after seeing it retires it; nothing renders off its page, so nothing
   flashes. A delete clears it only for a share refusal, since deleting frees nothing against the
   hourly limit or the ceiling. Tests cover both.
+
+A targeted check of the nit commit found nit 3 only partly fixed, plus two gaps in the new message
+state. All three are fixed in `App.tsx`:
+
+- The reader's current page is kept in a layout effect, so a refusal landing in the frame between a
+  navigation and its (transition-deferred) passive effects is no longer marked seen and lost.
+- Each create takes a sequence number; a create a newer one superseded neither reports its failure
+  nor navigates on a late success.
+- An hourly-limit message stores when the limit lifts. When a waiting message surfaces, its wait is
+  recomputed, or it is dropped if the wait has passed. The surfacing effect is a layout effect, so
+  the refreshed text is what paints first.

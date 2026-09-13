@@ -1,4 +1,10 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useLayoutEffect,
+  useRef,
+} from "react";
 import holeService from "./services";
 import Home from "./components/Home";
 import Hole from "./components/Hole";
@@ -21,13 +27,18 @@ const waitPhrase = (seconds: number | undefined) => {
   return minutes === 1 ? "in about a minute" : `in about ${minutes} minutes`;
 };
 
-const createErrorMessage = (error: unknown) => {
+// `retryAt` is when the hourly limit lifts. The wait is worked out from it
+// whenever the message is shown, so one that waited for the reader still
+// tells the truth.
+const createErrorMessage = (error: unknown, now: number, retryAt?: number) => {
   if (error instanceof HoleLimitError) {
     switch (error.reason) {
       case "full":
         return "This RequestHole is full: it already holds as many holes as it is allowed. Try again once older holes expire.";
       case "rate-limit":
-        return `You're creating holes faster than this RequestHole allows. Try again ${waitPhrase(error.retryAfterSeconds)}.`;
+        return `You're creating holes faster than this RequestHole allows. Try again ${waitPhrase(
+          retryAt === undefined ? undefined : (retryAt - now) / 1000,
+        )}.`;
       case "share":
         return "You've reached the limit on live holes from your address. Delete a hole you no longer need, then try again.";
     }
@@ -36,7 +47,10 @@ const createErrorMessage = (error: unknown) => {
 };
 
 type CreateError = {
+  error: unknown;
   message: string;
+  /** When an hourly-limit refusal lifts; past it, the message is untrue. */
+  retryAt: number | undefined;
   /** Deleting a hole makes room only for a share refusal. */
   clearsOnDelete: boolean;
   /** The page the create started on; the message belongs there. */
@@ -54,23 +68,37 @@ function App() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   // Where the reader is when a create settles, which can be a page they
-  // moved to after clicking. Read after the await, so it has to be a ref.
+  // moved to after clicking. Read after the await, so it has to be a ref, and
+  // it is kept in a layout effect: that runs inside the commit, so no network
+  // callback can land between a navigation and the ref catching up. (Router
+  // navigations are transitions, whose passive effects are deferred.)
   const pathnameRef = useRef(pathname);
-  useEffect(() => {
+  useLayoutEffect(() => {
     pathnameRef.current = pathname;
   });
+  // Bumped by each create. A create that a newer one has superseded does not
+  // get to report: its outcome says nothing about the latest attempt.
+  const latestCreate = useRef(0);
 
   // A message belongs to the page the create started on and only renders
   // there. One that landed while the reader was elsewhere waits until they
-  // come back and see it; once seen, leaving the page retires it. Never
-  // rendered off its page, so nothing flashes on the way past.
-  useEffect(() => {
+  // come back and see it, with its wait worked out afresh, or is dropped if
+  // that wait has passed; once seen, leaving the page retires it. A layout
+  // effect, so the refreshed text is what paints first.
+  useLayoutEffect(() => {
     setCreateError((previous) => {
       if (previous === null) return previous;
-      if (previous.page === pathname) {
-        return previous.seen ? previous : { ...previous, seen: true };
+      if (previous.page !== pathname) return previous.seen ? null : previous;
+      if (previous.seen) return previous;
+      const now = Date.now();
+      if (previous.retryAt !== undefined && now >= previous.retryAt) {
+        return null;
       }
-      return previous.seen ? null : previous;
+      return {
+        ...previous,
+        seen: true,
+        message: createErrorMessage(previous.error, now, previous.retryAt),
+      };
     });
   }, [pathname]);
 
@@ -104,6 +132,7 @@ function App() {
     // down. Without the catch the rejection went nowhere and the button read
     // as doing nothing at all.
     const page = pathname;
+    const attempt = ++latestCreate.current;
     setCreateError(null);
     try {
       const result = await holeService.addHole();
@@ -114,14 +143,26 @@ function App() {
       // A successful create also clears a stale failure: the list is no longer
       // unknown, and leaving it "failed" would report the new hole as lost.
       setLoadState("loaded");
-      navigate(`/view/${result[0].hole_address}`);
+      // The hole exists either way, but only the latest create moves the
+      // reader: an older one landing late would yank them somewhere else.
+      if (attempt === latestCreate.current) {
+        navigate(`/view/${result[0].hole_address}`);
+      }
     } catch (error) {
       console.error(error);
+      if (attempt !== latestCreate.current) return;
       // The list is exactly as it was. A refusal (429, 503) is the backend
       // enforcing a limit, and even a real failure here says nothing about
       // holes that already loaded; the message says which it was.
+      const now = Date.now();
+      const retryAt =
+        error instanceof HoleLimitError && error.retryAfterSeconds !== undefined
+          ? now + error.retryAfterSeconds * 1000
+          : undefined;
       setCreateError({
-        message: createErrorMessage(error),
+        error,
+        message: createErrorMessage(error, now, retryAt),
+        retryAt,
         clearsOnDelete:
           error instanceof HoleLimitError && error.reason === "share",
         page,
