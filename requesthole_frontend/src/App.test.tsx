@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import holeService from "./services";
@@ -240,6 +240,54 @@ describe("a hole creation that is refused", () => {
     await user.click(screen.getByRole("link", { name: "Home" }));
 
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  // Deleting frees a share slot and nothing else. Clearing an hourly-limit
+  // message on delete would throw away the wait it names, and the next
+  // create would be refused all the same.
+  it("keeps an hourly-limit message when the reader deletes a hole", async () => {
+    const user = userEvent.setup();
+    vi.mocked(holeService.addHole).mockRejectedValue(
+      new HoleLimitError("rate-limit", 1800),
+    );
+    vi.mocked(holeService.deleteHole).mockResolvedValue(true);
+    await renderLoaded();
+    await user.click(screen.getByRole("button", { name: /create hole/i }));
+    await screen.findByRole("alert");
+
+    await user.click(screen.getByRole("button", { name: /delete/i }));
+    await waitFor(() =>
+      expect(screen.queryByRole("table")).not.toBeInTheDocument(),
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent(/30 minutes/i);
+  });
+
+  // The reader clicked Create and moved on before the answer came. The
+  // refusal must wait for them rather than be lost, or flash and vanish.
+  it("shows a refusal that landed while the reader was on another page", async () => {
+    const user = userEvent.setup();
+    let refuse: (error: Error) => void = () => {};
+    vi.mocked(holeService.addHole).mockReturnValue(
+      new Promise((_, reject) => {
+        refuse = reject;
+      }),
+    );
+    await renderLoaded();
+    await user.click(screen.getByRole("button", { name: /create hole/i }));
+
+    await user.click(
+      within(screen.getByRole("table")).getByRole("link", { name: "abc123" }),
+    );
+    await screen.findByRole("heading", { level: 1, name: /Hole abc123/i });
+    await act(async () => {
+      refuse(new HoleLimitError("share"));
+    });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("link", { name: "Home" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/delete/i);
   });
 
   it("says the deployment is full when the ceiling refuses it", async () => {

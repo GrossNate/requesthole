@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import holeService from "./services";
 import Home from "./components/Home";
 import Hole from "./components/Hole";
@@ -35,22 +35,49 @@ const createErrorMessage = (error: unknown) => {
   return "Couldn't create a hole. The backend didn't answer. Check that it's running, then try again.";
 };
 
+type CreateError = {
+  message: string;
+  /** Deleting a hole makes room only for a share refusal. */
+  clearsOnDelete: boolean;
+  /** The page the create started on; the message belongs there. */
+  page: string;
+  /** Whether the reader has had it on screen. */
+  seen: boolean;
+};
+
 function App() {
   const [holes, setHoles] = useState<holeObject[]>([]);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   // Kept apart from `loadState`: a create that fails says nothing about the
   // list, which may have loaded perfectly well.
-  const [createError, setCreateError] = useState<string | null>(null);
+  const [createError, setCreateError] = useState<CreateError | null>(null);
   const navigate = useNavigate();
   const { pathname } = useLocation();
-
-  // A refusal describes one moment. Leaving the page, or deleting a hole to
-  // make room, changes what the next create would get, so the message goes.
+  // Where the reader is when a create settles, which can be a page they
+  // moved to after clicking. Read after the await, so it has to be a ref.
+  const pathnameRef = useRef(pathname);
   useEffect(() => {
-    setCreateError(null);
+    pathnameRef.current = pathname;
+  });
+
+  // A message belongs to the page the create started on and only renders
+  // there. One that landed while the reader was elsewhere waits until they
+  // come back and see it; once seen, leaving the page retires it. Never
+  // rendered off its page, so nothing flashes on the way past.
+  useEffect(() => {
+    setCreateError((previous) => {
+      if (previous === null) return previous;
+      if (previous.page === pathname) {
+        return previous.seen ? previous : { ...previous, seen: true };
+      }
+      return previous.seen ? null : previous;
+    });
   }, [pathname]);
+
+  // Deleting a hole makes room against the per-client share and nothing
+  // else: an hourly-limit or ceiling message still holds afterwards.
   const setHolesAfterDelete: typeof setHoles = useCallback((update) => {
-    setCreateError(null);
+    setCreateError((previous) => (previous?.clearsOnDelete ? null : previous));
     setHoles(update);
   }, []);
 
@@ -76,6 +103,7 @@ function App() {
     // Reachable from the failed-load panel, so the backend may well still be
     // down. Without the catch the rejection went nowhere and the button read
     // as doing nothing at all.
+    const page = pathname;
     setCreateError(null);
     try {
       const result = await holeService.addHole();
@@ -92,7 +120,13 @@ function App() {
       // The list is exactly as it was. A refusal (429, 503) is the backend
       // enforcing a limit, and even a real failure here says nothing about
       // holes that already loaded; the message says which it was.
-      setCreateError(createErrorMessage(error));
+      setCreateError({
+        message: createErrorMessage(error),
+        clearsOnDelete:
+          error instanceof HoleLimitError && error.reason === "share",
+        page,
+        seen: pathnameRef.current === page,
+      });
     }
   };
 
@@ -181,7 +215,9 @@ function App() {
                 createHole={createHole}
                 reloadHoles={loadHoles}
                 loadState={loadState}
-                createError={createError}
+                createError={
+                  createError?.page === pathname ? createError.message : null
+                }
               />
             }
           />

@@ -29,7 +29,7 @@ const isAddress = (value: string) => ADDRESS.test(value);
 // would switch the check off for `..%2Fapi/x%zz`. Fastify refuses malformed
 // escapes with 400 before routing today, so this is defence in depth, not
 // the only guard. Byte-wise decoding garbles multi-byte characters, but only
-// `.`, `/` and `\` matter here, and those are single bytes.
+// `.` and `/` matter here, and those are single bytes.
 const decodeEscapes = (path: string) =>
   path.replace(/%([0-9a-fA-F]{2})/g, (_, hex: string) =>
     String.fromCharCode(parseInt(hex, 16)),
@@ -37,10 +37,12 @@ const decodeEscapes = (path: string) =>
 
 // Decoded first, then split: nginx turns `%2F` into a separator before it
 // resolves dot segments, so `..%2Fapi` is a dot segment by the time nginx
-// picks a location. Backslashes count as separators too.
+// picks a location. Only `/` counts: nginx on Linux does not treat `\` as a
+// separator, so `..\api` stays in the collect location as one segment and is
+// a real capture.
 const hasDotSegment = (url: string) =>
   decodeEscapes(url.split("?", 1)[0] ?? "")
-    .split(/[/\\]/)
+    .split("/")
     .some((segment) => segment === "." || segment === "..");
 
 const params: JSONSchemaType<HoleParams> = {

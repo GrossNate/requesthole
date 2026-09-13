@@ -324,3 +324,15 @@ for the hole share too.
   mentions the startup sweep; the README smoke-test summary lists the resource-bound checks.
 - Tests: the backend-down create test now asserts its alert. Smoke 3f posts its oversized body to
   `/api/holes`, which cannot create a hole if the cap ever regresses.
+
+**Round 6 nits (2026-09-12) — fixed on request.** A targeted check of the round-5 commit verified all
+twelve fixes and found three nits in them:
+
+- `hasDotSegment` splits on `/` only. nginx on Linux does not treat `\` as a separator, so
+  `..%5Capi` stays in the collect location as one segment and is a real capture; it had been
+  wrongly refused. A socket test pins the capture.
+- The create message is now `{ message, clearsOnDelete, page, seen }`. It renders only on the page
+  the create started on. A refusal that lands while the reader is elsewhere waits until they return
+  and see it, and leaving after seeing it retires it; nothing renders off its page, so nothing
+  flashes. A delete clears it only for a share refusal, since deleting frees nothing against the
+  hourly limit or the ceiling. Tests cover both.

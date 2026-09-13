@@ -546,7 +546,6 @@ describe("resource bounds", () => {
         // so a `..` next to an encoded slash is a dot segment too.
         ["/HOLE/..%2Fapi/x"],
         ["/HOLE/x%2F..%2F..%2Fapi/x"],
-        ["/HOLE/..%5Capi/x"],
       ])("refuses %s without capturing it", async (template) => {
         const app = await start();
         const hole = await createHole(app);
@@ -573,6 +572,15 @@ describe("resource bounds", () => {
 
         expect(await rawPost(app, `/${hole}/..%2Fapi/x`)).toBe(404);
         expect(await rawPost(app, `/${hole}/real`)).toBe(200);
+      });
+
+      // nginx on Linux does not treat `\` as a separator: `..%5Capi` stays in
+      // the collect location as one segment, so it is a real capture.
+      it("still captures a backslash, which nginx does not treat as a separator", async () => {
+        const app = await start();
+        const hole = await createHole(app);
+
+        expect(await rawPost(app, `/${hole}/..%5Capi/x`)).toBe(200);
       });
 
       it("still captures an encoded slash that is not beside a dot segment", async () => {
