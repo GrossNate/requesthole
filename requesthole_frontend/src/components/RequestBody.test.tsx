@@ -919,3 +919,73 @@ describe("with media off, review fixes", () => {
     expect(holeService.getBodyBytes).not.toHaveBeenCalled();
   });
 });
+
+describe("with media off, round-two fixes", () => {
+  const off = { allowMedia: false };
+  const form = (partHead: string, content: string) =>
+    toBytes(`--B\r\n${partHead}\r\n\r\n${content}\r\n--B--\r\n`);
+
+  it("renders a multipart part of an unrecognised type as text when it is UTF-8", async () => {
+    vi.mocked(holeService.getBodyBytes).mockResolvedValue(
+      served(
+        form(
+          'content-disposition: form-data; name="q"\r\ncontent-type: application/x-unlisted',
+          "query { viewer }",
+        ),
+      ),
+    );
+    const { container } = renderBody("multipart/form-data; boundary=B", off);
+
+    await screen.findByText("query { viewer }");
+    expect(container.textContent).not.toMatch(/bytes/);
+  });
+
+  it("decodes a multipart part as UTF-8 whatever charset it declares", async () => {
+    vi.mocked(holeService.getBodyBytes).mockResolvedValue(
+      served(
+        form(
+          'content-disposition: form-data; name="q"\r\ncontent-type: text/plain; charset=windows-1252',
+          "café",
+        ),
+      ),
+    );
+    renderBody("multipart/form-data; boundary=B", off);
+
+    expect(await screen.findByText("café")).toBeVisible();
+  });
+
+  it("builds no download blob for an unparseable multipart body over the cap", async () => {
+    const createObjectURL = vi.fn(() => "blob:fake");
+    vi.stubGlobal("URL", { createObjectURL, revokeObjectURL: vi.fn() });
+    vi.mocked(holeService.getBodyBytes).mockResolvedValue(
+      served(toBytes("x".repeat(DISPLAY_CAP_BYTES + 1))),
+    );
+    renderBody("multipart/form-data; boundary=nowhere", off);
+
+    expect(
+      await screen.findByText(/not shown on this instance/i),
+    ).toBeVisible();
+    await settle();
+    expect(createObjectURL).not.toHaveBeenCalled();
+    expect(screen.queryByRole("link", { name: /download/i })).toBeNull();
+  });
+
+  // The drop notice needs nothing from the instance config.
+  it("shows a dropped body's notice while the config is still pending", async () => {
+    render(
+      <MediaConfigContext.Provider value={undefined}>
+        <RequestBody
+          requestAddress="req001"
+          contentType="image/png"
+          dropped={parseBodyDropped(
+            '{"reason":"type","bytes":2048,"contentType":"image/png"}',
+          )}
+        />
+      </MediaConfigContext.Provider>,
+    );
+
+    expect(
+      await screen.findByText("Media/binary data dropped: 2 KB, image/png"),
+    ).toBeVisible();
+  });
+});

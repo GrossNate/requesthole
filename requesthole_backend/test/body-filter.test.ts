@@ -599,30 +599,45 @@ describe("filterBody", () => {
       });
     });
 
-    // Fail closed: what cannot be parsed as parts gets the whole-body checks,
-    // which drop any hidden binary.
+    // Fail closed: a form that cannot be parsed into parts is dropped whole
+    // as malformed. Whole-body checks cannot see an SVG or base64 part inside
+    // it, so falling back to them would let those through.
     it.each([
       ["no boundary parameter", "multipart/form-data"],
       ["a boundary that never appears", "multipart/form-data; boundary=nope"],
-    ])("falls back to whole-body checks with %s", (_, contentType) => {
-      expect(
-        filterBody(imageForm, { "content-type": contentType }).dropped,
-      ).toEqual({ reason: "bytes", bytes: imageForm.length, contentType });
-      const textual = text("just some text");
-      expect(filterBody(textual, { "content-type": contentType })).toEqual({
-        body: textual,
-        dropped: null,
-      });
+      [
+        "a boundary longer than RFC 2046's 70 characters",
+        `multipart/form-data; boundary=${"q".repeat(71)}`,
+      ],
+    ])("drops a form with %s as malformed", (_, contentType) => {
+      for (const body of [imageForm, text("just some text")]) {
+        expect(filterBody(body, { "content-type": contentType })).toEqual({
+          body: null,
+          dropped: { reason: "malformed", bytes: body.length, contentType },
+        });
+      }
     });
 
-    it("drops an unparseable region's body whole", () => {
+    it("accepts a boundary of exactly 70 characters", () => {
+      const boundary = "q".repeat(70);
+      const body = text(`--${boundary}\r\n\r\nv\r\n--${boundary}--\r\n`);
+      expect(
+        filterBody(body, {
+          "content-type": `multipart/form-data; boundary=${boundary}`,
+        }),
+      ).toEqual({ body, dropped: null });
+    });
+
+    it("drops a form with an unparseable region whole", () => {
       const body = Buffer.concat([
         text(crlf("--XyZ", "no-blank-line", "")),
         PNG,
         text("\r\n"),
         text(crlf(field("ok", "fine"), "--XyZ--", "")),
       ]);
-      expect(filterBody(body, form).dropped).toMatchObject({ reason: "bytes" });
+      expect(filterBody(body, form).dropped).toMatchObject({
+        reason: "malformed",
+      });
     });
 
     it("drops the body whole when a part's header block is not text", () => {
@@ -633,7 +648,62 @@ describe("filterBody", () => {
           '\r\nContent-Disposition: form-data; name="a"\r\n\r\nv\r\n--XyZ--\r\n',
         ),
       ]);
-      expect(filterBody(body, form).dropped).toMatchObject({ reason: "bytes" });
+      expect(filterBody(body, form).dropped).toMatchObject({
+        reason: "malformed",
+      });
+    });
+
+    // Header blocks are stored verbatim, so they must be headers: a line with
+    // no field name, or a bare CR or LF inside a line, is not.
+    it.each([
+      [
+        "a line with no colon",
+        'not a header\r\nContent-Disposition: form-data; name="a"',
+      ],
+      [
+        "a bare LF inside a line",
+        'X-A: 1\nsmuggled\r\nContent-Disposition: form-data; name="a"',
+      ],
+      [
+        "an empty field name",
+        ': value\r\nContent-Disposition: form-data; name="a"',
+      ],
+    ])("drops a form whose part header block has %s", (_, block) => {
+      const body = text(`--XyZ\r\n${block}\r\n\r\nv\r\n--XyZ--\r\n`);
+      expect(filterBody(body, form).dropped).toMatchObject({
+        reason: "malformed",
+      });
+    });
+
+    // Readers find a PDF or PostScript header anywhere in the first 1 KB, and
+    // part headers are stored as sent.
+    it.each([
+      ["pdf", "%PDF-1.4"],
+      ["postscript", "%!PS-Adobe-3.0"],
+    ])(
+      "drops a form carrying a %s header in a part header",
+      (signature, marker) => {
+        const body = text(
+          `--XyZ\r\nContent-Disposition: form-data; name="${marker}"\r\n\r\nv\r\n--XyZ--\r\n`,
+        );
+        expect(filterBody(body, form).dropped).toMatchObject({
+          reason: "signature",
+          signature,
+        });
+      },
+    );
+
+    it("stays fast on a long boundary with near-miss filler", () => {
+      const boundary = "q".repeat(8000);
+      const filler = `--${"q".repeat(7999)}z`.repeat(125);
+      const body = text(
+        `--${boundary}\r\n\r\n${filler}\r\n--${boundary}--\r\n`,
+      );
+      const started = performance.now();
+      filterBody(body, {
+        "content-type": `multipart/form-data; boundary=${boundary}`,
+      });
+      expect(performance.now() - started).toBeLessThan(100);
     });
   });
 
@@ -715,12 +785,44 @@ describe("filterBody", () => {
     it.each([
       ["pdf", "hello\n%PDF-1.4\n1 0 obj"],
       ["postscript", "junk line\n%!PS-Adobe-3.0\n"],
-    ])("drops a %s whose header follows a leading line", (signature, value) => {
+    ])("drops a %s whose header starts a later line", (signature, value) => {
       expect(signatureOf(value)).toBe(signature);
     });
 
     it("keeps text that mentions %PDF- only after the first 1024 bytes", () => {
-      expect(signatureOf(`${"x".repeat(1024)}%PDF-1.4`)).toBeUndefined();
+      expect(signatureOf(`${"x".repeat(1024)}\n%PDF-1.4`)).toBeUndefined();
+    });
+
+    // Only a header that starts a line counts, so text that mentions one is
+    // kept.
+    it.each([
+      ["prose", "see the attached %PDF-1.4 file"],
+      ["JSON", '{"note":"file starts with %PDF-1.7 header"}'],
+      ["a printer note", "the printer wants %!PS input"],
+    ])("keeps %s mentioning a header mid-line", (_, value) => {
+      expect(signatureOf(value)).toBeUndefined();
+    });
+
+    it.each([
+      ["a raw P6 pixmap", "P6\n2 1\n126\n~~~~~~"],
+      ["a raw P5 graymap", "P5\n2 1\n126\n~~"],
+      ["a P4 bitmap", "P4\n8 1\n~"],
+      ["a P7 PAM", "P7\nWIDTH 1\nHEIGHT 1\nDEPTH 1\nMAXVAL 126\nENDHDR\n~"],
+      ["a comment right after the magic", "P3#c\n2 2\n1\n0 0 0\n"],
+      ["a CR-terminated comment", "P3\r#c\r2 2\r1\r0 0 0\r"],
+    ])("drops %s", (_, value) => {
+      expect(signatureOf(value)).toBe("netpbm");
+    });
+
+    it.each([
+      ["LOGO", "LOGO;ENCODING=b;TYPE=PNG:iVBOR"],
+      ["SOUND", "SOUND;ENCODING=b;TYPE=OGG:T2dn"],
+    ])("drops a vCard carrying a %s", (_, property) => {
+      expect(
+        signatureOf(
+          `BEGIN:VCARD\r\nVERSION:3.0\r\n${property}\r\nEND:VCARD\r\n`,
+        ),
+      ).toBe("vcard");
     });
   });
 
@@ -763,16 +865,19 @@ describe("filterBody", () => {
         tail,
       ]);
 
-    it("keeps a text body whole rather than losing its last part", () => {
-      const body = open(text("second field text"));
-      expect(filterBody(body, form)).toEqual({ body, dropped: null });
-    });
-
-    it("drops the body whole when the unclosed tail is binary", () => {
-      const body = open(PNG);
-      expect(filterBody(body, form).dropped).toMatchObject({
-        reason: "bytes",
-        bytes: body.length,
+    it.each([
+      ["text", text("second field text")],
+      ["binary", PNG],
+      ["an SVG part", text('<svg xmlns="http://www.w3.org/2000/svg"/>')],
+    ])("drops it as malformed when the tail is %s", (_, tail) => {
+      const body = open(tail);
+      expect(filterBody(body, form)).toEqual({
+        body: null,
+        dropped: {
+          reason: "malformed",
+          bytes: body.length,
+          contentType: "multipart/form-data; boundary=b",
+        },
       });
     });
   });

@@ -237,10 +237,11 @@ failure drops it:
   (RTF, vCard, iCalendar, uuencode) are dropped. HTML stays allowed.
 - **Bytes.** The body must be valid UTF-8 with no control characters other than
   tab, line feed, carriage return and form feed.
-- **File signature.** A body that starts like an RTF, SVG, XPM, XBM, Netpbm,
-  vCard with a photo, uuencoded file or MIME message is dropped, whatever
-  type it claims. PDF and PostScript headers count anywhere in the first
-  1024 bytes, since that is where readers look for them. The SVG check skips
+- **File signature.** A body that starts like an RTF, SVG, XPM, XBM, Netpbm
+  (P1 to P7), vCard with a photo, logo or sound, uuencoded file or MIME message
+  is dropped, whatever type it claims. A PDF or PostScript header counts at the
+  start of any line in the first 1024 bytes, since readers look that far; text
+  that mentions one mid-line is kept. The SVG check skips
   the whole XML prolog (declaration, comments, doctype) however long it is,
   and accepts a namespace-prefixed root. A fixed limit would let padding hide
   the `<svg` behind it.
@@ -249,10 +250,14 @@ failure drops it:
   shows every field. A part with `Content-Transfer-Encoding`, or one that is
   itself multipart, is dropped. The stored body is rebuilt from the parts, so
   any preamble or epilogue is discarded. Header blocks are stored as sent, so
-  they must pass the byte check too. A multipart body that does not parse, that
-  has a part header that is not text, or that never sends its closing
-  boundary gets the whole-body byte and signature checks instead, so nothing
-  in it is lost without a trace.
+  every line in them must be a `name: value` header that passes the byte check,
+  and a PDF or PostScript header anywhere in one drops the form.
+- **Forms that do not parse are dropped.** A `multipart/form-data` body with no
+  boundary, a boundary longer than RFC 2046's 70 characters, a region that is
+  not a part, a malformed part header, or no closing boundary is dropped whole
+  as malformed. The whole-body checks cannot see an image or an encoded part
+  hidden inside such a body, so there is nothing safe to keep. A client that
+  forgets the closing boundary loses its form, and the drop notice says why.
 
 A dropped body is stored empty, with a description of what arrived: its size,
 declared type and why it was dropped. The viewer shows that description in

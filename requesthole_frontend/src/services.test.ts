@@ -174,8 +174,11 @@ describe("instance config", () => {
     await expect(holeService.getConfig()).resolves.toEqual({
       allowMedia: true,
     });
+    // A hung config endpoint must not hold the viewer back forever: the
+    // request carries its own deadline, and running out of time is a failure.
     expect(axios.get).toHaveBeenCalledWith(
       `${holeService.BASE_URL}/api/config`,
+      expect.objectContaining({ timeout: expect.any(Number) }),
     );
   });
 

@@ -267,27 +267,55 @@ function doctypeEnd(text: string, from: number): number {
 const SVG_ROOT = /^<(?:[A-Za-z_][\w.-]*:)?svg(?![\w.:-])/i;
 
 /**
+/** Whether any line of `text` starts (after blanks) with `marker`. */
+function lineStartsWith(text: string, marker: string): boolean {
+  let at = text.indexOf(marker);
+  while (at !== -1) {
+    let before = at - 1;
+    while (before >= 0 && /[ \t\f]/.test(text[before]!)) before -= 1;
+    if (
+      before < 0 ||
+      text[before] === "\n" ||
+      text[before] === "\r" ||
+      text[before] === "\uFEFF"
+    ) {
+      return true;
+    }
+    at = text.indexOf(marker, at + marker.length);
+  }
+  return false;
+}
+
+/**
  * Image and document formats that are pure ASCII and would pass steps 1–4
  * under text/plain. Anchored at the start (after an optional BOM and leading
  * whitespace), except PDF and PostScript, which readers find anywhere in the
  * first 1024 bytes. Scanning the whole body for `data:image/` would contradict
- * the accepted base64 limit and break real JSON.
+ * the accepted base64 limit and break legitimate JSON.
  */
 const SIGNATURES: [string, (start: string, whole: string) => boolean][] = [
-  // Readers take these headers anywhere in the first 1024 bytes, so a
-  // leading line must not hide them.
-  ["pdf", (_, whole) => whole.slice(0, 1024).includes("%PDF-")],
-  ["postscript", (_, whole) => whole.slice(0, 1024).includes("%!PS")],
+  // Readers look for these headers through the first 1024 bytes, so a
+  // leading line must not hide them; only a line start counts, so text that
+  // mentions one mid-line is kept.
+  ["pdf", (_, whole) => lineStartsWith(whole.slice(0, 1024), "%PDF-")],
+  ["postscript", (_, whole) => lineStartsWith(whole.slice(0, 1024), "%!PS")],
   ["rtf", (start) => start.startsWith("{\\rtf")],
   ["svg", (start) => SVG_ROOT.test(afterXmlProlog(start))],
   ["xpm", (start) => start.startsWith("/* XPM */")],
   ["xbm", (start) => /^#define[ \t]+\S*_width[ \t]/.test(start)],
-  ["netpbm", (start) => /^P[1-3]\s+(?:#[^\n]*\n\s*)*\d/.test(start)],
+  // P1–P6 then whitespace or comments (ended by CR or LF) before the width;
+  // P7 (PAM) then its header lines.
+  [
+    "netpbm",
+    (start) =>
+      /^P[1-6](?:[ \t\r\n\f\v]|#[^\r\n]*[\r\n])+\d/.test(start) ||
+      /^P7[\r\n]/.test(start),
+  ],
   [
     "vcard",
     (start, whole) =>
       /^BEGIN:VCARD/i.test(start) &&
-      /^(?:[A-Za-z0-9-]+\.)?PHOTO[;:]/im.test(whole),
+      /^(?:[A-Za-z0-9-]+\.)?(?:PHOTO|LOGO|SOUND)[;:]/im.test(whole),
   ],
   ["uuencode", (start) => /^begin [0-7]{3}\s/.test(start)],
   ["mime", (start) => /^MIME-Version:/i.test(start)],
@@ -353,22 +381,38 @@ const CRLF = Buffer.from("\r\n");
  * Step 6. Each part runs steps 1, 3, 4 and 5 against its own headers; a
  * dropped part keeps its headers and loses its content. The stored body is
  * rebuilt from the parts, so preamble and epilogue — which parsers ignore,
- * but which could hold arbitrary bytes — are never stored. Returns undefined
- * when the body cannot be parsed into parts, so the caller fails closed.
+ * but which could hold arbitrary bytes — are never stored. Returns a failure
+ * when the body cannot be parsed into parts, so the caller drops it whole.
  */
 function filterMultipart(
   body: Buffer,
   boundary: string | undefined,
-): FilterResult | undefined {
-  if (boundary === undefined) return undefined;
-  const parsed = parseMultipart(body, boundary);
-  // An unclosed body would lose its tail in the rebuild without a trace.
-  if (parsed === undefined || parsed.skipped > 0 || !parsed.closed) {
-    return undefined;
+): FilterResult | Failure {
+  // RFC 2046 caps a boundary at 70 characters. A longer one makes every
+  // delimiter search cost its length, over up to MAX_BODY_BYTES of body.
+  if (boundary === undefined || boundary.length > MAX_BOUNDARY_LENGTH) {
+    return { reason: "malformed" };
   }
-  // Header blocks are stored verbatim, so they must be text too.
-  if (parsed.parts.some(({ headerBytes }) => !checkBytes(headerBytes))) {
-    return undefined;
+  const parsed = parseMultipart(body, boundary);
+  // An unclosed body would lose its tail in the rebuild, and a skipped region
+  // is content no part check saw.
+  if (parsed === undefined || parsed.skipped > 0 || !parsed.closed) {
+    return { reason: "malformed" };
+  }
+  // Header blocks are stored verbatim, so they must be text, and headers.
+  for (const { headerBytes } of parsed.parts) {
+    if (!checkBytes(headerBytes) || !isHeaderBlock(headerBytes)) {
+      return { reason: "malformed" };
+    }
+    // A reader finds a PDF or PostScript header anywhere in the first 1 KB,
+    // and nothing legitimate puts one in a part header.
+    const headerText = headerBytes.toString("utf8");
+    if (headerText.includes("%PDF-")) {
+      return { reason: "signature", signature: "pdf" };
+    }
+    if (headerText.includes("%!PS")) {
+      return { reason: "signature", signature: "postscript" };
+    }
   }
 
   const delimiter = Buffer.from(`--${boundary}`, "utf8");
@@ -401,6 +445,23 @@ function filterMultipart(
     body: Buffer.concat(chunks),
     dropped: drops.length > 0 ? { parts: drops } : null,
   };
+}
+
+const MAX_BOUNDARY_LENGTH = 70;
+
+const FIELD_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+
+/** Every line is `name: value`, with no bare CR or LF inside a line. */
+function isHeaderBlock(headerBytes: Buffer): boolean {
+  if (headerBytes.length === 0) return true;
+  return headerBytes
+    .toString("utf8")
+    .split("\r\n")
+    .every((line) => {
+      if (/[\r\n]/.test(line)) return false;
+      const colon = line.indexOf(":");
+      return colon > 0 && FIELD_NAME.test(line.slice(0, colon));
+    });
 }
 
 /** Steps 1, 3, 4 and 5 for one part; no recursive multipart parsing. */
@@ -449,9 +510,11 @@ export function filterBody(
   const { media } = verdict;
   if (!checkAllowedType(media)) return drop({ reason: "type" });
 
+  // A form that cannot be parsed into parts is dropped whole: whole-body
+  // checks cannot see an SVG or an encoded part inside it.
   if (media.type === "multipart") {
     const result = filterMultipart(body, media.parameters.get("boundary"));
-    if (result !== undefined) return result;
+    return "reason" in result ? drop(result) : result;
   }
   const failure = checkContent(body);
   return failure === undefined ? { body, dropped: null } : drop(failure);

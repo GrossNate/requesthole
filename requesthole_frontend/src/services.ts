@@ -26,6 +26,13 @@ const BASE_URL = import.meta.env.DEV ? "http://localhost:3000" : "";
 const SNAPSHOT_IDLE_MS = 15_000;
 
 /**
+ * The viewer waits for the instance config before rendering a body, so the
+ * config fetch cannot be allowed to hang: past this it counts as a failure,
+ * which reads as media off.
+ */
+const CONFIG_TIMEOUT_MS = 5_000;
+
+/**
  * Addresses reach this layer from the route, where they are whatever a link
  * said they were, and every one of them is interpolated into a request path.
  * Encoding and checking here rather than at each call site means a new caller
@@ -170,7 +177,9 @@ async function getBodyBytes(requestAddress: string): Promise<BodyBytes> {
  */
 async function getConfig(): Promise<InstanceConfig> {
   try {
-    const response = await axios.get<unknown>(`${BASE_URL}/api/config`);
+    const response = await axios.get<unknown>(`${BASE_URL}/api/config`, {
+      timeout: CONFIG_TIMEOUT_MS,
+    });
     const data = response.data as { allowMedia?: unknown } | null;
     return { allowMedia: data?.allowMedia === true };
   } catch (error) {

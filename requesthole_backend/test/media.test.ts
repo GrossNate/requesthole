@@ -243,7 +243,7 @@ describe("media gate", () => {
       });
       expect(
         JSON.parse((await fetchRequest(app, address)).body_dropped!),
-      ).toMatchObject({ reason: "bytes", bytes: PNG.length });
+      ).toMatchObject({ reason: "malformed", bytes: PNG.length });
     });
 
     it("carries body_dropped in the list and the SSE frame", async () => {

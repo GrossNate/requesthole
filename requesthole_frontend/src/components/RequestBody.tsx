@@ -144,11 +144,6 @@ const CodeBlock = ({
   );
 };
 
-/**
- * Decodes body bytes per the content-type's charset parameter, defaulting to
- * UTF-8. The charset is attacker-controlled, so an unknown label falls back
- * to UTF-8 rather than throwing.
- */
 /** Whether the bytes are well-formed UTF-8 — what the backend keeps. */
 function isUtf8(bytes: Uint8Array): boolean {
   try {
@@ -159,6 +154,12 @@ function isUtf8(bytes: Uint8Array): boolean {
   }
 }
 
+/**
+ * Decodes body bytes per the content-type's charset parameter, defaulting to
+ * UTF-8. The charset is attacker-controlled, so an unknown label falls back
+ * to UTF-8 rather than throwing. With media off callers pass undefined, so
+ * the bytes decode as the UTF-8 the backend verified.
+ */
 function decodeBytes(bytes: Uint8Array, charset: string | undefined): string {
   let decoder: TextDecoder;
   try {
@@ -246,8 +247,7 @@ const RequestBody = ({
     };
   }, [requestAddress, family, bodyWasDropped, configPending]);
 
-  if (configPending) return null;
-
+  // The drop notice needs nothing from the instance config.
   if (wholeDrop !== undefined) {
     return (
       <BodySection>
@@ -255,6 +255,8 @@ const RequestBody = ({
       </BodySection>
     );
   }
+
+  if (configPending) return null;
 
   if (family === "image") {
     // A bare broken-image glyph explains nothing; every other family has an
