@@ -65,6 +65,23 @@ type TypeVerdict =
 const BANNED_CHARSET = /^(?:utf-?7|utf-?16.*|utf-?32.*)$/;
 
 /**
+ * Whether a declared charset would make a decoder read the bytes as something
+ * other than the UTF-8 the byte check verified. Besides the names above, the
+ * viewer's TextDecoder knows WHATWG aliases such as `ucs-2` and `unicode` as
+ * UTF-16, so labels are resolved the way it resolves them. A label it does not
+ * know falls back to UTF-8 there, so it is harmless here.
+ */
+function isBannedCharset(label: string): boolean {
+  if (BANNED_CHARSET.test(label.toLowerCase())) return true;
+  try {
+    const { encoding } = new TextDecoder(label);
+    return encoding === "utf-16le" || encoding === "utf-16be";
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Step 1: the strict parse. A missing content-type is legitimate (Pub/Sub
  * unwrapped push omits it) and gated as text/plain.
  */
@@ -77,7 +94,7 @@ function checkContentType(values: string[]): TypeVerdict {
       : parseContentType(value);
   if (media === undefined) return { ok: false, reason: "malformed" };
   const charset = media.parameters.get("charset");
-  if (charset !== undefined && BANNED_CHARSET.test(charset.toLowerCase())) {
+  if (charset !== undefined && isBannedCharset(charset)) {
     return { ok: false, reason: "type" };
   }
   return { ok: true, media };
@@ -205,16 +222,9 @@ function afterXmlProlog(text: string): string {
       if (end === -1) return "";
       at = end + 3;
     } else if (text.slice(at, at + 9).toLowerCase() === "<!doctype") {
-      let depth = 0;
-      let end = at + 9;
-      for (; end < text.length; end++) {
-        const char = text[end];
-        if (char === "[") depth += 1;
-        else if (char === "]") depth -= 1;
-        else if (char === ">" && depth <= 0) break;
-      }
-      if (end >= text.length) return "";
-      at = end + 1;
+      const end = doctypeEnd(text, at + 9);
+      if (end === -1) return "";
+      at = end;
     } else {
       return text.slice(at);
     }
@@ -222,16 +232,54 @@ function afterXmlProlog(text: string): string {
 }
 
 /**
+ * Where a doctype that starts at `from` ends, or -1. Quoted literals, and
+ * comments and processing instructions in the internal subset, may hold `>`
+ * and `]` without ending anything, so they are skipped whole.
+ */
+function doctypeEnd(text: string, from: number): number {
+  let inSubset = false;
+  let at = from;
+  while (at < text.length) {
+    const char = text[at]!;
+    if (char === '"' || char === "'") {
+      const close = text.indexOf(char, at + 1);
+      if (close === -1) return -1;
+      at = close + 1;
+    } else if (inSubset && text.startsWith("<!--", at)) {
+      const close = text.indexOf("-->", at + 4);
+      if (close === -1) return -1;
+      at = close + 3;
+    } else if (inSubset && text.startsWith("<?", at)) {
+      const close = text.indexOf("?>", at + 2);
+      if (close === -1) return -1;
+      at = close + 2;
+    } else {
+      if (char === "[") inSubset = true;
+      else if (char === "]") inSubset = false;
+      else if (char === ">" && !inSubset) return at + 1;
+      at += 1;
+    }
+  }
+  return -1;
+}
+
+/** The first element is `svg`, namespace prefix or not. */
+const SVG_ROOT = /^<(?:[A-Za-z_][\w.-]*:)?svg(?![\w.:-])/i;
+
+/**
  * Image and document formats that are pure ASCII and would pass steps 1–4
  * under text/plain. Anchored at the start (after an optional BOM and leading
- * whitespace) — scanning the body for `data:image/` would contradict the
- * accepted base64 limit and break real JSON.
+ * whitespace), except PDF and PostScript, which readers find anywhere in the
+ * first 1024 bytes. Scanning the whole body for `data:image/` would contradict
+ * the accepted base64 limit and break real JSON.
  */
 const SIGNATURES: [string, (start: string, whole: string) => boolean][] = [
-  ["pdf", (start) => start.startsWith("%PDF-")],
-  ["postscript", (start) => start.startsWith("%!PS")],
+  // Readers take these headers anywhere in the first 1024 bytes, so a
+  // leading line must not hide them.
+  ["pdf", (_, whole) => whole.slice(0, 1024).includes("%PDF-")],
+  ["postscript", (_, whole) => whole.slice(0, 1024).includes("%!PS")],
   ["rtf", (start) => start.startsWith("{\\rtf")],
-  ["svg", (start) => /^<svg/i.test(afterXmlProlog(start))],
+  ["svg", (start) => SVG_ROOT.test(afterXmlProlog(start))],
   ["xpm", (start) => start.startsWith("/* XPM */")],
   ["xbm", (start) => /^#define[ \t]+\S*_width[ \t]/.test(start)],
   ["netpbm", (start) => /^P[1-3]\s+(?:#[^\n]*\n\s*)*\d/.test(start)],
@@ -314,7 +362,10 @@ function filterMultipart(
 ): FilterResult | undefined {
   if (boundary === undefined) return undefined;
   const parsed = parseMultipart(body, boundary);
-  if (parsed === undefined || parsed.skipped > 0) return undefined;
+  // An unclosed body would lose its tail in the rebuild without a trace.
+  if (parsed === undefined || parsed.skipped > 0 || !parsed.closed) {
+    return undefined;
+  }
   // Header blocks are stored verbatim, so they must be text too.
   if (parsed.parts.some(({ headerBytes }) => !checkBytes(headerBytes))) {
     return undefined;

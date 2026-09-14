@@ -830,3 +830,92 @@ describe("with media off", () => {
     });
   });
 });
+
+describe("with media off, review fixes", () => {
+  const off = { allowMedia: false };
+  const stubBlobs = () => {
+    const createObjectURL = vi.fn(() => "blob:fake");
+    vi.stubGlobal("URL", { createObjectURL, revokeObjectURL: vi.fn() });
+    return createObjectURL;
+  };
+
+  // The backend only keeps text with media off, so a type this viewer does
+  // not know is still readable text.
+  it("renders an unrecognised type as text when its bytes are UTF-8", async () => {
+    vi.mocked(holeService.getBodyBytes).mockResolvedValue(
+      served(toBytes("query { viewer { login } }")),
+    );
+    const { container } = renderBody("application/x-unlisted-text", off);
+
+    await screen.findByText("query { viewer { login } }");
+    expect(container.textContent).not.toMatch(/bytes —/);
+  });
+
+  // The byte check verified UTF-8; a declared charset must not make the
+  // viewer show something other than what passed it.
+  it("decodes as UTF-8 whatever charset is declared", async () => {
+    vi.mocked(holeService.getBodyBytes).mockResolvedValue(
+      served(toBytes("café")),
+    );
+    renderBody("text/plain; charset=windows-1252", off);
+
+    expect(await screen.findByText("café")).toBeVisible();
+  });
+
+  it.each([
+    ["an over-cap text body", "text/plain", "x".repeat(DISPLAY_CAP_BYTES + 1)],
+    [
+      "a form over the row cap",
+      "application/x-www-form-urlencoded",
+      Array.from({ length: MAX_RENDERED_ROWS + 1 }, (_, i) => `k${i}=v`).join(
+        "&",
+      ),
+    ],
+  ])("builds no download blob for %s", async (_, contentType, body) => {
+    const createObjectURL = stubBlobs();
+    vi.mocked(holeService.getBodyBytes).mockResolvedValue(
+      served(toBytes(body)),
+    );
+    renderBody(contentType, off);
+
+    await screen.findByText(/not shown/i);
+    await settle();
+    expect(createObjectURL).not.toHaveBeenCalled();
+    expect(screen.queryByRole("link", { name: /download/i })).toBeNull();
+    expect(screen.queryByText(/download the body/i)).toBeNull();
+  });
+
+  it("builds no download blob for a multipart body over the part cap", async () => {
+    const createObjectURL = stubBlobs();
+    const parts = Array.from(
+      { length: MAX_RENDERED_ROWS + 1 },
+      (_, i) =>
+        `--B\r\ncontent-disposition: form-data; name="f${i}"\r\n\r\nv\r\n`,
+    ).join("");
+    vi.mocked(holeService.getBodyBytes).mockResolvedValue(
+      served(toBytes(`${parts}--B--\r\n`)),
+    );
+    renderBody("multipart/form-data; boundary=B", off);
+
+    await screen.findByText(/not shown/i);
+    await settle();
+    expect(createObjectURL).not.toHaveBeenCalled();
+  });
+
+  // On a media-on instance the answer is still on its way: rendering now
+  // would take the media-off path first and flash a hex preview.
+  it("renders nothing and fetches nothing until the instance config is known", async () => {
+    vi.mocked(holeService.getBodyBytes).mockResolvedValue(
+      served(toBytes("hello")),
+    );
+    const { container } = render(
+      <MediaConfigContext.Provider value={undefined}>
+        <RequestBody requestAddress="req001" contentType="image/png" />
+      </MediaConfigContext.Provider>,
+    );
+
+    await settle();
+    expect(container).toBeEmptyDOMElement();
+    expect(holeService.getBodyBytes).not.toHaveBeenCalled();
+  });
+});

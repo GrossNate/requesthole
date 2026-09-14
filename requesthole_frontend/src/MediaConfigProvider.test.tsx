@@ -8,22 +8,36 @@ vi.mock("./services", () => ({
   default: { getConfig: vi.fn() },
 }));
 
-const Probe = () => <span>{useAllowMedia() ? "media on" : "media off"}</span>;
+const Probe = () => {
+  const allowMedia = useAllowMedia();
+  return (
+    <span>
+      {allowMedia === undefined
+        ? "pending"
+        : allowMedia
+          ? "media on"
+          : "media off"}
+    </span>
+  );
+};
+
+const renderProvided = () =>
+  render(
+    <MediaConfigProvider>
+      <Probe />
+    </MediaConfigProvider>,
+  );
 
 afterEach(() => {
   vi.clearAllMocks();
 });
 
 describe("MediaConfigProvider", () => {
-  it("reports media off until the instance says otherwise, fetching once", async () => {
+  it("is pending until the instance answers, then says media on, fetching once", async () => {
     vi.mocked(holeService.getConfig).mockResolvedValue({ allowMedia: true });
-    const { rerender } = render(
-      <MediaConfigProvider>
-        <Probe />
-      </MediaConfigProvider>,
-    );
+    const { rerender } = renderProvided();
 
-    expect(screen.getByText("media off")).toBeInTheDocument();
+    expect(screen.getByText("pending")).toBeInTheDocument();
     expect(await screen.findByText("media on")).toBeInTheDocument();
     rerender(
       <MediaConfigProvider>
@@ -33,15 +47,14 @@ describe("MediaConfigProvider", () => {
     expect(holeService.getConfig).toHaveBeenCalledTimes(1);
   });
 
-  it("stays media off when the instance says so", async () => {
+  // getConfig turns any failure into `{ allowMedia: false }`, so this is also
+  // what a failed fetch looks like here.
+  it("settles on media off when the instance says so", async () => {
     vi.mocked(holeService.getConfig).mockResolvedValue({ allowMedia: false });
-    render(
-      <MediaConfigProvider>
-        <Probe />
-      </MediaConfigProvider>,
-    );
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(screen.getByText("media off")).toBeInTheDocument();
+    renderProvided();
+
+    expect(screen.getByText("pending")).toBeInTheDocument();
+    expect(await screen.findByText("media off")).toBeInTheDocument();
   });
 
   it("is media off with no provider at all", () => {

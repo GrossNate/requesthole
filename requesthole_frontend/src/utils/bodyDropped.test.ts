@@ -165,7 +165,7 @@ describe("summarizeDrop", () => {
           }),
         )!,
       ),
-    ).toBe("Media/binary data dropped from 2 parts: 3 KB");
+    ).toBe("Media/binary data dropped from 2 parts: 3 KB, image/png");
     expect(
       summarizeDrop(
         parseBodyDropped(
@@ -173,5 +173,27 @@ describe("summarizeDrop", () => {
         )!,
       ),
     ).toBe("Media/binary data dropped from 1 part: 2 KB, image/png");
+  });
+});
+
+describe("summarizeDrop with several parts", () => {
+  it("names each distinct part type", () => {
+    const part = { name: null, filename: null, reason: "type" };
+    expect(
+      summarizeDrop(
+        parseBodyDropped(
+          JSON.stringify({
+            parts: [
+              { ...part, index: 0, bytes: 2048, contentType: "image/png" },
+              { ...part, index: 1, bytes: 1024, contentType: "video/mp4" },
+              { ...part, index: 2, bytes: 1024, contentType: "image/png" },
+              { ...part, index: 3, bytes: 1024, contentType: null },
+            ],
+          }),
+        )!,
+      ),
+    ).toBe(
+      "Media/binary data dropped from 4 parts: 5 KB, image/png, video/mp4, no content-type",
+    );
   });
 });

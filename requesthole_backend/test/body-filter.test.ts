@@ -442,7 +442,6 @@ describe("filterBody", () => {
         "<!DOCTYPE html><html><body><svg></svg></body></html>",
       ],
       ["XML whose root is not svg", '<?xml version="1.0"?><feed><svg/></feed>'],
-      ["prose mentioning a PDF", "see the attached %PDF-1.4 file"],
       ["prose starting with P1", "P1 is the priority"],
       [
         "a vCard without a photo",
@@ -635,6 +634,146 @@ describe("filterBody", () => {
         ),
       ]);
       expect(filterBody(body, form).dropped).toMatchObject({ reason: "bytes" });
+    });
+  });
+
+  // Review fixes (task 0008 review): the parsers see up to MAX_BODY_BYTES of
+  // sender-controlled text at capture and again on every body read, so each
+  // must stay linear.
+  describe("parser cost", () => {
+    const form = { "content-type": "multipart/form-data; boundary=b" };
+    const withinASecond = (run: () => void) => {
+      const started = performance.now();
+      run();
+      expect(performance.now() - started).toBeLessThan(1000);
+    };
+
+    it("parses a part content-type padded with a megabyte of whitespace quickly", () => {
+      const body = text(
+        `--b\r\nContent-Type: text/plain${" ".repeat(1_000_000)}x\r\n\r\nhi\r\n--b--\r\n`,
+      );
+      withinASecond(() => {
+        expect(filterBody(body, form).dropped).toMatchObject({
+          parts: [{ reason: "malformed" }],
+        });
+      });
+    });
+
+    it("parses a top-level content-type padded with whitespace quickly", () => {
+      withinASecond(() => {
+        expect(
+          (
+            filterBody(text("hi"), {
+              "content-type": `text/plain${" ".repeat(100_000)}x`,
+            }).dropped as BodyDrop | null
+          )?.reason,
+        ).toBe("malformed");
+      });
+    });
+
+    it("parses a content-disposition of a megabyte of empty parameters quickly", () => {
+      const body = text(
+        `--b\r\nContent-Disposition: form-data${";".repeat(1_000_000)}name=x\r\n\r\nhi\r\n--b--\r\n`,
+      );
+      withinASecond(() => {
+        expect(filterBody(body, form).dropped).toBeNull();
+      });
+    });
+  });
+
+  describe("signature check, review fixes", () => {
+    const plain = { "content-type": "text/plain" };
+    const signatureOf = (value: string) =>
+      (filterBody(text(value), plain).dropped as BodyDrop | null)?.signature;
+
+    it.each([
+      [
+        "a quoted '>' in the doctype",
+        '<!DOCTYPE svg SYSTEM "a>b"><svg xmlns="http://www.w3.org/2000/svg"/>',
+      ],
+      [
+        "a ']' inside an entity value",
+        '<!DOCTYPE svg [<!ENTITY x "]">]><svg xmlns="http://www.w3.org/2000/svg"/>',
+      ],
+      [
+        "a comment and a PI in the internal subset",
+        "<!DOCTYPE svg [<!-- ]> --><?pi ]>?>]><svg/>",
+      ],
+      [
+        "a namespace-prefixed root",
+        '<s:svg xmlns:s="http://www.w3.org/2000/svg"/>',
+      ],
+      [
+        "a prolog longer than 1 KB",
+        `<?xml version="1.0"?><!-- ${"pad ".repeat(400)} --><svg/>`,
+      ],
+    ])("drops an SVG behind %s", (_, value) => {
+      expect(signatureOf(value)).toBe("svg");
+    });
+
+    // Readers accept these headers anywhere in the first 1024 bytes.
+    it.each([
+      ["pdf", "hello\n%PDF-1.4\n1 0 obj"],
+      ["postscript", "junk line\n%!PS-Adobe-3.0\n"],
+    ])("drops a %s whose header follows a leading line", (signature, value) => {
+      expect(signatureOf(value)).toBe(signature);
+    });
+
+    it("keeps text that mentions %PDF- only after the first 1024 bytes", () => {
+      expect(signatureOf(`${"x".repeat(1024)}%PDF-1.4`)).toBeUndefined();
+    });
+  });
+
+  describe("charset labels that decode as UTF-16", () => {
+    // The viewer hands the declared charset to TextDecoder, which knows these
+    // WHATWG labels as UTF-16 even though they do not say so.
+    it.each([
+      "ucs-2",
+      "unicode",
+      "csunicode",
+      "iso-10646-ucs-2",
+      "unicodefeff",
+      "unicodefffe",
+    ])("drops charset=%s", (charset) => {
+      expect(
+        (
+          filterBody(text("hello"), {
+            "content-type": `text/plain; charset=${charset}`,
+          }).dropped as BodyDrop | null
+        )?.reason,
+      ).toBe("type");
+    });
+
+    it("still keeps a charset TextDecoder does not know", () => {
+      expect(
+        filterBody(text("hello"), {
+          "content-type": "text/plain; charset=x-made-up",
+        }).dropped,
+      ).toBeNull();
+    });
+  });
+
+  describe("multipart without a close delimiter", () => {
+    const form = { "content-type": "multipart/form-data; boundary=b" };
+    const open = (tail: Buffer) =>
+      Buffer.concat([
+        text(
+          '--b\r\nContent-Disposition: form-data; name="a"\r\n\r\nhello\r\n--b\r\nContent-Disposition: form-data; name="c"\r\n\r\n',
+        ),
+        tail,
+      ]);
+
+    it("keeps a text body whole rather than losing its last part", () => {
+      const body = open(text("second field text"));
+      expect(filterBody(body, form)).toEqual({ body, dropped: null });
+    });
+
+    it("drops the body whole when the unclosed tail is binary", () => {
+      const body = open(PNG);
+      expect(filterBody(body, form).dropped).toMatchObject({
+        reason: "bytes",
+        bytes: body.length,
+      });
     });
   });
 });

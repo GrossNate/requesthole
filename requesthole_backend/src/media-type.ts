@@ -15,8 +15,11 @@ export function parseParameters(header: string): Record<string, string> {
   if (at === -1) return parameters;
   at += 1;
 
+  // The next `=` is found once and reused until `at` passes it: searching
+  // afresh each turn is quadratic on a run of valueless `;` segments.
+  let equals = -1;
   while (at < header.length) {
-    const equals = header.indexOf("=", at);
+    if (equals < at) equals = header.indexOf("=", at);
     if (equals === -1) break;
     const semicolon = header.indexOf(";", at);
     // A valueless token (`; flag; a=1`) — skip it, don't let its `;` be
@@ -79,7 +82,21 @@ const TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
  * wildcard, or the same parameter twice. Never throws.
  */
 export function parseContentType(value: string): ContentType | undefined {
-  const input = value.replace(/^[ \t]+|[ \t]+$/g, "");
+  // Index scans, not a trimming regex: `/^[ \t]+|[ \t]+$/` backtracks
+  // quadratically on a long whitespace run, and multipart part headers put up
+  // to MAX_BODY_BYTES of sender text here.
+  let first = 0;
+  let last = value.length;
+  while (first < last && (value[first] === " " || value[first] === "\t")) {
+    first += 1;
+  }
+  while (
+    last > first &&
+    (value[last - 1] === " " || value[last - 1] === "\t")
+  ) {
+    last -= 1;
+  }
+  const input = value.slice(first, last);
   let at = 0;
   const readToken = () => {
     const start = at;

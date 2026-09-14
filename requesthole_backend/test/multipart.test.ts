@@ -169,4 +169,14 @@ describe("parseMultipart", () => {
     const { parts } = parseMultipart(body, "B")!;
     expect(parts.map((part) => part.name)).toEqual(["kept"]);
   });
+
+  // Without a close delimiter the region after the last delimiter is neither
+  // a part nor skipped; the caller needs to know so it can fail closed.
+  it("says whether the body ended with a close delimiter", () => {
+    const part = '--B\r\ncontent-disposition: form-data; name="a"\r\n\r\nv\r\n';
+    expect(parseMultipart(encode(`${part}--B--\r\n`), "B")!.closed).toBe(true);
+    expect(
+      parseMultipart(encode(`${part}--B\r\n\r\nunclosed tail`), "B")!.closed,
+    ).toBe(false);
+  });
 });

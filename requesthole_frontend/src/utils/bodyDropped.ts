@@ -156,7 +156,8 @@ export function summarizeDrop(dropped: BodyDropped): string {
   const { parts } = dropped;
   const total = parts.reduce((sum, part) => sum + part.bytes, 0);
   const count = `${parts.length} ${parts.length === 1 ? "part" : "parts"}`;
-  const type =
-    parts.length === 1 ? `, ${parts[0].contentType ?? "no content-type"}` : "";
-  return `${PREFIX} from ${count}: ${formatByteCount(total)}${type}`;
+  const types = [
+    ...new Set(parts.map((part) => part.contentType ?? "no content-type")),
+  ];
+  return `${PREFIX} from ${count}: ${[formatByteCount(total), ...types].join(", ")}`;
 }

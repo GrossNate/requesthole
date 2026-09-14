@@ -27,6 +27,11 @@ export interface MultipartParseResult {
   parts: MultipartPart[];
   /** Regions between delimiters that could not be parsed as a part. */
   skipped: number;
+  /**
+   * Whether the body ended with a close delimiter. Without one, whatever
+   * follows the last delimiter is neither a part nor counted in `skipped`.
+   */
+  closed: boolean;
 }
 
 const CR = 13;
@@ -132,5 +137,7 @@ export function parseMultipart(
     });
   }
 
-  return parts.length > 0 ? { parts, skipped } : undefined;
+  const last = positions[positions.length - 1]! + delimiter.length;
+  const closed = bytes[last] === DASH && bytes[last + 1] === DASH;
+  return parts.length > 0 ? { parts, skipped, closed } : undefined;
 }

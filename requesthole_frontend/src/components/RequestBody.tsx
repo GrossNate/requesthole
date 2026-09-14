@@ -80,6 +80,16 @@ function useOwnedBlobUrl(
   return url;
 }
 
+/**
+ * Where a note would offer the full body as a download. With media off no
+ * blob is built at all — a failed config fetch on a media-on instance must
+ * not turn image bytes into a file — so the note says what is missing instead.
+ */
+const seeAllOf = (downloadable: boolean, what: string) =>
+  downloadable
+    ? ` Download the body to see all of ${what}.`
+    : " The rest is not shown on this instance.";
+
 const DownloadLink = ({
   url,
   filename,
@@ -139,6 +149,16 @@ const CodeBlock = ({
  * UTF-8. The charset is attacker-controlled, so an unknown label falls back
  * to UTF-8 rather than throwing.
  */
+/** Whether the bytes are well-formed UTF-8 — what the backend keeps. */
+function isUtf8(bytes: Uint8Array): boolean {
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function decodeBytes(bytes: Uint8Array, charset: string | undefined): string {
   let decoder: TextDecoder;
   try {
@@ -156,10 +176,11 @@ function decodeBytes(bytes: Uint8Array, charset: string | undefined): string {
  * with media allowed, an inert <img>/download); nothing here may ever emit
  * them as markup.
  *
- * With media off (the default, and whenever the instance config is unknown)
- * it never builds an <img> or a blob for binary content: image types get the
- * hex preview without a download, and an untyped body is text, since the
- * backend only keeps text.
+ * With media off (the default, and whenever the instance config could not be
+ * read) it never builds an <img> or a blob: image types get the hex preview
+ * without a download, over-cap text says what it leaves out instead of
+ * offering the file, and an untyped body is text, since the backend only
+ * keeps text.
  */
 const RequestBody = ({
   requestAddress,
@@ -171,7 +192,11 @@ const RequestBody = ({
   /** What the media gate dropped from this request, if anything. */
   dropped?: BodyDropped | undefined;
 }) => {
-  const allowMedia = useAllowMedia();
+  const mediaConfig = useAllowMedia();
+  // Still asking the instance: waiting beats rendering the media-off path and
+  // then switching, which would flash a hex preview on a media-on instance.
+  const configPending = mediaConfig === undefined;
+  const allowMedia = mediaConfig === true;
   const media = parseMediaType(contentType);
   const declaredFamily = classifyBody(media);
   const family = allowMedia
@@ -181,7 +206,10 @@ const RequestBody = ({
       : declaredFamily === "image"
         ? "binary"
         : declaredFamily;
-  const charset = media?.parameters["charset"];
+  // With media off the backend verified strict UTF-8, so that is how the
+  // bytes are read: a declared charset (`ucs-2`, `windows-1252`) must not make
+  // the viewer show something other than what passed the check.
+  const charset = allowMedia ? media?.parameters["charset"] : undefined;
   const wholeDrop = dropped?.kind === "whole" ? dropped : undefined;
   const droppedParts = dropped?.kind === "parts" ? dropped.parts : undefined;
   // A boolean, not the object: callers parse the description per render.
@@ -195,7 +223,7 @@ const RequestBody = ({
   useEffect(() => {
     setImageFailed(false);
     // A dropped body was stored empty; there is nothing to fetch.
-    if (family === "image" || bodyWasDropped) return;
+    if (configPending || family === "image" || bodyWasDropped) return;
     let current = true;
     setBytes(undefined);
     setWithheld(false);
@@ -216,7 +244,9 @@ const RequestBody = ({
     return () => {
       current = false;
     };
-  }, [requestAddress, family, bodyWasDropped]);
+  }, [requestAddress, family, bodyWasDropped, configPending]);
+
+  if (configPending) return null;
 
   if (wholeDrop !== undefined) {
     return (
@@ -285,8 +315,11 @@ const RequestBody = ({
 
   // Binary bodies keep their hex-preview rendering whatever their size, and
   // multipart bodies cap per part — only text-rendered families go through
-  // the whole-body truncation path.
-  if (family === "binary") {
+  // the whole-body truncation path. With media off, a type this viewer does
+  // not know is still text if its bytes say so: that is all the backend
+  // keeps. Anything else there (an instance whose config could not be read)
+  // keeps the hex glimpse, without a download.
+  if (family === "binary" && (allowMedia || !isUtf8(bytes))) {
     return (
       <BinaryBody
         bytes={bytes}
@@ -316,6 +349,7 @@ const RequestBody = ({
         bytes={bytes}
         charset={charset}
         requestAddress={requestAddress}
+        downloadable={allowMedia}
       />
     );
   }
@@ -379,6 +413,7 @@ const RequestBody = ({
           text={text}
           bytes={bytes}
           requestAddress={requestAddress}
+          downloadable={allowMedia}
         />
       );
     default:
@@ -437,14 +472,16 @@ const FormEncodedBody = ({
   text,
   bytes,
   requestAddress,
+  downloadable,
 }: {
   text: string;
   bytes: Uint8Array;
   requestAddress: string;
+  downloadable: boolean;
 }) => {
   const pairs = useMemo(() => Array.from(new URLSearchParams(text)), [text]);
   const omitted = Math.max(0, pairs.length - MAX_RENDERED_ROWS);
-  const downloadUrl = useOwnedBlobUrl(bytes, omitted > 0);
+  const downloadUrl = useOwnedBlobUrl(bytes, downloadable && omitted > 0);
 
   return (
     <BodySection>
@@ -452,8 +489,8 @@ const FormEncodedBody = ({
         <p className="text-caption text-warning">
           {pairs.length.toLocaleString()} pairs — showing the first{" "}
           {MAX_RENDERED_ROWS.toLocaleString()}, {omitted.toLocaleString()} more{" "}
-          {omitted === 1 ? "pair" : "pairs"} not shown. Download the body to see
-          all of them.
+          {omitted === 1 ? "pair" : "pairs"} not shown.
+          {seeAllOf(downloadable, "them")}
         </p>
       ) : null}
       <div className="border-base-300 rounded-box overflow-hidden border">
@@ -486,7 +523,7 @@ const FormEncodedBody = ({
           </tbody>
         </table>
       </div>
-      {omitted > 0 ? (
+      {downloadable && omitted > 0 ? (
         <DownloadLink url={downloadUrl} filename={`${requestAddress}.bin`} />
       ) : null}
     </BodySection>
@@ -527,7 +564,7 @@ const MultipartBody = ({
     : 0;
   const downloadUrl = useOwnedBlobUrl(
     bytes,
-    parsed === undefined ? overCap : omitted > 0,
+    allowMedia && (parsed === undefined ? overCap : omitted > 0),
   );
 
   if (parsed === undefined) {
@@ -536,11 +573,12 @@ const MultipartBody = ({
         <p className="text-caption text-warning">
           This body didn't parse as multipart/form-data; showing it as raw text
           {overCap ? ", truncated" : ""}.
+          {overCap && !allowMedia ? seeAllOf(false, "it") : null}
         </p>
         <CodeBlock
           text={decodeBytes(bytes.subarray(0, DISPLAY_CAP_BYTES), charset)}
         />
-        {overCap ? (
+        {allowMedia && overCap ? (
           <DownloadLink url={downloadUrl} filename={`${requestAddress}.bin`} />
         ) : null}
       </BodySection>
@@ -561,8 +599,8 @@ const MultipartBody = ({
         <p className="text-caption text-warning">
           {parts.length.toLocaleString()} parts — showing the first{" "}
           {MAX_RENDERED_ROWS.toLocaleString()}, {omitted.toLocaleString()} more{" "}
-          {omitted === 1 ? "part" : "parts"} not shown. Download the body to see
-          all of them.
+          {omitted === 1 ? "part" : "parts"} not shown.
+          {seeAllOf(allowMedia, "them")}
         </p>
       ) : null}
       <ul className="gap-tight flex list-none flex-col">
@@ -596,7 +634,7 @@ const MultipartBody = ({
           </li>
         ))}
       </ul>
-      {omitted > 0 ? (
+      {allowMedia && omitted > 0 ? (
         <DownloadLink url={downloadUrl} filename={`${requestAddress}.bin`} />
       ) : null}
     </BodySection>
@@ -623,9 +661,12 @@ const MultipartPartContent = ({
   // non-raster images like SVG, which could execute as a document — gets the
   // binary treatment: preview plus download, so a captured file part is
   // never stranded as a bare byte count.
+  // With media off, a part of a type unknown here is text when its bytes are:
+  // the backend kept it, so it passed the same checks as a whole body.
   const isTextual =
     part.contentType === undefined ||
-    (family !== "binary" && family !== "image" && family !== "multipart");
+    (family !== "binary" && family !== "image" && family !== "multipart") ||
+    (!allowMedia && family !== "multipart" && isUtf8(part.bytes));
   const blobUrl = useOwnedBlobUrl(
     part.bytes,
     allowMedia && !isTextual && dropped === undefined,
@@ -661,7 +702,7 @@ const MultipartPartContent = ({
         <span className="address text-base-content whitespace-pre-wrap">
           {decodeBytes(
             part.bytes.subarray(0, DISPLAY_CAP_BYTES),
-            partMedia?.parameters["charset"],
+            allowMedia ? partMedia?.parameters["charset"] : undefined,
           )}
         </span>
       </>
@@ -733,24 +774,28 @@ const TruncatedBody = ({
   bytes,
   charset,
   requestAddress,
+  downloadable,
 }: {
   bytes: Uint8Array;
   charset: string | undefined;
   requestAddress: string;
+  downloadable: boolean;
 }) => {
-  const downloadUrl = useOwnedBlobUrl(bytes);
+  const downloadUrl = useOwnedBlobUrl(bytes, downloadable);
 
   return (
     <BodySection>
       <p className="text-caption text-warning">
         Truncated: showing the first {DISPLAY_CAP_BYTES.toLocaleString()} of{" "}
-        {bytes.byteLength.toLocaleString()} bytes. Download the body to see all
-        of it.
+        {bytes.byteLength.toLocaleString()} bytes.
+        {seeAllOf(downloadable, "it")}
       </p>
       <CodeBlock
         text={decodeBytes(bytes.subarray(0, DISPLAY_CAP_BYTES), charset)}
       />
-      <DownloadLink url={downloadUrl} filename={`${requestAddress}.bin`} />
+      {downloadable ? (
+        <DownloadLink url={downloadUrl} filename={`${requestAddress}.bin`} />
+      ) : null}
     </BodySection>
   );
 };

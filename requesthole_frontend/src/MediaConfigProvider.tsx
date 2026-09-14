@@ -8,7 +8,9 @@ export default function MediaConfigProvider({
 }: {
   children: React.ReactNode;
 }) {
-  const [allowMedia, setAllowMedia] = useState(false);
+  // Undefined until the instance answers; getConfig never rejects, and turns
+  // any failure into false.
+  const [allowMedia, setAllowMedia] = useState<boolean>();
 
   useEffect(() => {
     let current = true;

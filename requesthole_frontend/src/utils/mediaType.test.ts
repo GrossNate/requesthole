@@ -154,3 +154,38 @@ describe("classifyBody's top-level gate", () => {
     expect(classifyBody(parseMediaType(header))).toBe(family);
   });
 });
+
+describe("classifyBody and the backend's text allowlist", () => {
+  // Every text type the backend keeps with media off must have a text
+  // rendering here; "binary" would show a stored body as an unreadable
+  // hex glimpse.
+  it.each([
+    ["application/jsonlines", "ndjson"],
+    ["application/x-amz-json-1.1", "json"],
+    ["application/x-amz-json-1.0", "json"],
+    ["application/csp-report", "json"],
+    ["application/graphql", "text"],
+    ["application/sql", "text"],
+    ["application/toml", "text"],
+    ["application/x-toml", "text"],
+    ["application/csv", "text"],
+    ["application/jwt", "text"],
+    ["application/jose", "text"],
+    ["application/x-sh", "text"],
+    ["application/x-shellscript", "text"],
+    ["application/jsonpath", "text"],
+    ["application/sparql-query", "text"],
+    ["application/sparql-update", "text"],
+    ["application/n-triples", "text"],
+    ["application/n-quads", "text"],
+    ["application/trig", "text"],
+    ["application/xml-dtd", "xml"],
+    ["application/xml-external-parsed-entity", "xml"],
+    ["application/vnd.foo+csv", "text"],
+    ["application/foo+jwt", "text"],
+    ["application/foo+sd-jwt", "text"],
+    ["application/foo+jws", "text"],
+  ])("classifies %s as %s", (header, family) => {
+    expect(classifyBody(parseMediaType(header))).toBe(family);
+  });
+});

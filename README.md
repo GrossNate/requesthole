@@ -223,8 +223,9 @@ With media off, a body is kept only if it passes every check below. The first
 failure drops it:
 
 - **Content type.** The `Content-Type` is parsed strictly. A malformed value, a
-  wildcard, a repeated header or parameter, or a UTF-7, UTF-16 or UTF-32
-  charset drops the body. A request with no `Content-Type` is treated as
+  wildcard, a repeated header or parameter, or a charset that decodes as
+  UTF-7, UTF-16 or UTF-32 drops the body. That includes aliases browsers
+  read as UTF-16, such as `ucs-2` and `unicode`. A request with no `Content-Type` is treated as
   `text/plain`.
 - **Encoding.** A compressed body (`Content-Encoding` other than `identity`, or
   a transfer coding other than `chunked`) is dropped, never decompressed.
@@ -236,24 +237,33 @@ failure drops it:
   (RTF, vCard, iCalendar, uuencode) are dropped. HTML stays allowed.
 - **Bytes.** The body must be valid UTF-8 with no control characters other than
   tab, line feed, carriage return and form feed.
-- **File signature.** A body that starts like a PDF, PostScript, RTF, SVG, XPM,
-  XBM, Netpbm, vCard with a photo, uuencoded file or MIME message is dropped,
-  whatever type it claims.
+- **File signature.** A body that starts like an RTF, SVG, XPM, XBM, Netpbm,
+  vCard with a photo, uuencoded file or MIME message is dropped, whatever
+  type it claims. PDF and PostScript headers count anywhere in the first
+  1024 bytes, since that is where readers look for them. The SVG check skips
+  the whole XML prolog (declaration, comments, doctype) however long it is,
+  and accepts a namespace-prefixed root. A fixed limit would let padding hide
+  the `<svg` behind it.
 - **Multipart forms, part by part.** Each part gets the checks above. A
   dropped part keeps its headers and loses its content, so the form still
   shows every field. A part with `Content-Transfer-Encoding`, or one that is
   itself multipart, is dropped. The stored body is rebuilt from the parts, so
-  any preamble or epilogue is discarded. A multipart body that does not parse
-  gets the whole-body byte and signature checks instead.
+  any preamble or epilogue is discarded. Header blocks are stored as sent, so
+  they must pass the byte check too. A multipart body that does not parse, that
+  has a part header that is not text, or that never sends its closing
+  boundary gets the whole-body byte and signature checks instead, so nothing
+  in it is lost without a trace.
 
 A dropped body is stored empty, with a description of what arrived: its size,
 declared type and why it was dropped. The viewer shows that description in
-place of the body, marks the row in the request list, and never builds an image
-for anything while media is off, including when it cannot reach
-`/api/config`. The backend logs each drop as one line with the hole, the
+place of the body and marks the row in the request list. While media is off it
+never builds an image or a file download for anything, including when it
+cannot reach `/api/config`, and it reads every body as UTF-8, the encoding
+the byte check verified. The backend logs each drop as one line with the hole, the
 request, the declared type, the size and the reason, and never any content.
 
-The body endpoint serves every body as `text/plain; charset=utf-8` with
+With media off, the body endpoint serves every body as
+`text/plain; charset=utf-8` with
 `Cross-Origin-Resource-Policy: same-origin`, so no other site can embed it as
 an image. It also runs the checks again when it serves a body. If you turn
 media off after capturing with it on, the older binary bodies are answered
@@ -266,9 +276,12 @@ retention sweep removes them.
   JSON or HTML), percent-encoded bytes in a form body, and `\u` escapes in JSON
   are all valid text. The viewer shows them only as text, never as an image,
   and `MAX_BODY_BYTES` bounds their size. Lower it if that matters to you.
+- **No downloads with media off.** A text body longer than the viewer displays
+  (256 KB, or 1000 form fields or parts) shows its beginning and says the rest
+  is not shown. The full body is still available from the body endpoint.
 - **Compressed bodies are dropped, not inspected.** A sender that gzips its
   webhooks loses the body; the description says it was compressed.
-- **Some real text is dropped.** A text type that is not on the list, SendGrid's
+- **Some legitimate text is dropped.** A text type that is not on the list, SendGrid's
   "raw" inbound parse, and Mailgun's MIME forwarding are dropped with a
   description. The last two carry whole emails with base64 attachments. On a
   private instance, `ALLOW_MEDIA=true` is the way to keep them.

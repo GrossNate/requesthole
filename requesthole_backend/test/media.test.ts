@@ -6,6 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
+import net from "node:net";
 import { createHole, listRequests } from "./helpers";
 
 const PNG = Buffer.from([
@@ -133,16 +134,49 @@ describe("media gate", () => {
       expect((await fetchBody(app, address)).body).toBe(body);
     });
 
+    // Over a real socket: `inject` folds a repeated header into one line, which
+    // would pass for the wrong reason. Node keeps only the first Content-Type
+    // of two real lines, so only the raw headers can see the second.
     it("refuses a request that repeats its content-type", async () => {
       const app = await start();
       const hole = await createHole(app);
-      // Node keeps only the first Content-Type; the raw headers tell the truth.
-      const address = await send(app, hole, "hello", {
-        "content-type": ["text/plain", "image/png"] as unknown as string,
+      await app.listen({ port: 0, host: "127.0.0.1" });
+      const { port } = app.server.address() as { port: number };
+      await new Promise<void>((resolve, reject) => {
+        const socket = net.connect(port, "127.0.0.1", () => {
+          socket.end(
+            [
+              `POST /${hole} HTTP/1.1`,
+              "Host: 127.0.0.1",
+              "Content-Type: text/plain",
+              "Content-Type: image/png",
+              "Content-Length: 5",
+              "Connection: close",
+              "",
+              "hello",
+            ].join("\r\n"),
+          );
+        });
+        let answer = "";
+        socket.on("data", (chunk) => (answer += chunk.toString()));
+        socket.on("end", () =>
+          answer.startsWith("HTTP/1.1 200")
+            ? resolve()
+            : reject(new Error(answer)),
+        );
+        socket.on("error", reject);
       });
+
+      const [captured] = await listRequests(app, hole);
       expect(
-        JSON.parse((await fetchRequest(app, address)).body_dropped!),
-      ).toMatchObject({ reason: "malformed" });
+        JSON.parse(
+          (await fetchRequest(app, captured!.request_address)).body_dropped!,
+        ),
+      ).toEqual({
+        reason: "malformed",
+        bytes: 5,
+        contentType: "text/plain, image/png",
+      });
     });
 
     it("stores a multipart form's text fields and a dropped file's headers", async () => {
@@ -256,6 +290,55 @@ describe("media gate", () => {
       });
       expect(JSON.stringify(lines)).not.toContain("<svg");
     });
+
+    it("logs a multipart drop once, without names, filenames or content", async () => {
+      const { lines, logger } = logSink();
+      const app = await start({ logger });
+      const hole = await createHole(app);
+      const address = await send(
+        app,
+        hole,
+        Buffer.concat([
+          Buffer.from(
+            '--B\r\nContent-Disposition: form-data; name="secret-field"; filename="holiday.png"\r\nContent-Type: image/png\r\n\r\n',
+          ),
+          PNG,
+          Buffer.from(
+            '\r\n--B\r\nContent-Disposition: form-data; name="note"\r\n\r\nkept words\r\n--B--\r\n',
+          ),
+        ]),
+        { "content-type": "multipart/form-data; boundary=B" },
+      );
+
+      const drops = lines.filter((line) => line["msg"] === "dropped body");
+      expect(drops).toHaveLength(1);
+      expect(drops[0]).toMatchObject({
+        hole,
+        request: address,
+        contentType: "multipart/form-data; boundary=B",
+        reason: "type",
+      });
+      const logged = JSON.stringify(lines);
+      for (const leaked of [
+        "secret-field",
+        "holiday.png",
+        "kept words",
+        "PNG",
+      ]) {
+        expect(logged).not.toContain(leaked);
+      }
+    });
+  });
+
+  it("refuses to start on ALLOW_MEDIA=yes", () => {
+    vi.stubEnv("ALLOW_MEDIA", "yes");
+    try {
+      expect(() => buildApp({ databasePath: ":memory:" })).toThrow(
+        "ALLOW_MEDIA",
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("brings a database from before body_dropped up to date", async () => {
