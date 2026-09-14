@@ -116,5 +116,5 @@ Durable decisions that apply across all tasks.
 - [x] 0005 · Content-aware request body viewer (after 0004) → tasks/done/0005-body-viewer.md
 - [x] 0006 · List/detail layout and durable live streaming (after 0005) → tasks/done/0006-list-detail-layout.md
 - [x] 0007 · Resource bounds, abuse control, and sub-path capture (after 0006) → tasks/done/0007-bounds-and-subpaths.md
-- [~] 0008 · Text-only bodies by default (ALLOW_MEDIA) (after 0007) → tasks/0008-allow-media.md
+- [>] 0008 · Text-only bodies by default (ALLOW_MEDIA) (after 0007) → tasks/0008-allow-media.md
 - [ ] 0009 · General review of the finished application (after 0008) → tasks/0009-general-review.md
