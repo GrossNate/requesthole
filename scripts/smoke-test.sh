@@ -7,6 +7,12 @@
 #   * POST /api/hole            -> 201, returns a fixed 6-char hole_address
 #   * GET  /api/holes           -> includes the new address
 #   * POST /:address  (collect) -> 200
+#   * POST /:address/sub/path  -> 200, stored with its full path
+#   * an over-limit body         -> 413 from the backend, not from nginx,
+#                                   and never spooled to nginx's disk
+#   * a deleted hole's requests  -> 404, not an empty list
+#   * a `..` path via /api/      -> refused, not captured
+#   * a body sent to /api/*      -> capped by nginx at 16k
 #   * GET  /                    -> serves the SPA index.html
 #   * a hashed static asset      -> loads with 200
 #   * GET /api/hole/:addr/events -> streams a `data:` SSE event on capture
@@ -42,6 +48,12 @@ pass() { printf '  \033[32mPASS\033[0m %s\n' "$1"; PASS=$((PASS + 1)); }
 fail() { printf '  \033[31mFAIL\033[0m %s\n' "$1"; FAIL=$((FAIL + 1)); }
 
 cleanup() {
+  # Leave nothing behind on the persistent volume. Every hole this run made
+  # counts against this host's per-client share (MAX_HOLES_PER_IP) until the
+  # retention sweep, so a kept hole per run would fail the run after ~20.
+  if [ -n "${addr:-}" ]; then
+    curl -s -o /dev/null -X DELETE "${BASE}/api/hole/${addr}" || true
+  fi
   if [ "$DO_DOWN" -eq 1 ]; then
     echo "--- tearing down stack ---"
     docker compose down
@@ -106,6 +118,96 @@ if [ -n "$addr" ]; then
   fi
 else
   fail "collect capture — skipped, no address"
+fi
+
+# 3b) Collect capture at a sub-path -> 200, and the full path is what was stored.
+#     Guards the nginx regex: before it allowed sub-paths, this hit the SPA
+#     fallback and returned index.html with a 200, capturing nothing.
+if [ -n "$addr" ]; then
+  sub_code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "${BASE}/${addr}/webhook/v1?smoke=1" \
+    -H 'Content-Type: application/json' --data '{"smoke":true}')
+  if [ "$sub_code" = "200" ]; then
+    pass "POST /${addr}/webhook/v1 (sub-path collect) -> 200"
+  else
+    fail "POST /${addr}/webhook/v1 (sub-path collect) -> ${sub_code}"
+  fi
+  if curl -s "${BASE}/api/hole/${addr}/requests" | grep -q "/${addr}/webhook/v1?smoke=1"; then
+    pass "sub-path capture stored with its full path"
+  else
+    fail "sub-path capture not found in GET /api/hole/${addr}/requests"
+  fi
+else
+  fail "sub-path collect capture — skipped, no address"
+fi
+
+# 3c) An over-limit body is refused by the backend, not by nginx. nginx's own
+#     413 is an HTML page; Fastify's is JSON naming FST_ERR_CTP_BODY_TOO_LARGE.
+#     Proves MAX_BODY_BYTES is the one limit in force and nginx streams the
+#     body through rather than capping or spooling it.
+if [ -n "$addr" ]; then
+  big_body=$(head -c 2097152 /dev/zero | tr '\0' 'x')
+  big_response=$(printf '%s' "$big_body" | curl -s -w '\n%{http_code}' -X POST "${BASE}/${addr}" \
+    -H 'Content-Type: text/plain' --data-binary @-)
+  big_code=$(printf '%s' "$big_response" | tail -n1)
+  if [ "$big_code" = "413" ] && printf '%s' "$big_response" | grep -q 'FST_ERR_CTP_BODY_TOO_LARGE'; then
+    pass "2 MiB body -> 413 from the backend"
+  else
+    fail "2 MiB body -> ${big_code} (expected the backend's 413)"
+  fi
+  # nginx warns whenever it spools a request body to a temp file. Any such
+  # line means buffering is back on and an upload is being written to disk
+  # before the backend can refuse it.
+  if docker compose logs nginx 2>&1 | grep -q 'buffered to a temporary file'; then
+    fail "nginx spooled a request body to disk (proxy_request_buffering is on)"
+  else
+    pass "nginx streamed the body through without spooling it to disk"
+  fi
+else
+  fail "body limit — skipped, no address"
+fi
+
+# 3d) A hole that is gone answers 404 for its requests, so a reconnecting
+#     viewer can tell it from an empty one.
+doomed=$(curl -s -X POST "${BASE}/api/hole" | grep -oE '"hole_address":"[A-Za-z0-9]{6}"' | cut -d'"' -f4)
+if [ -n "$doomed" ]; then
+  curl -s -o /dev/null -X DELETE "${BASE}/api/hole/${doomed}"
+  gone_code=$(curl -s -o /dev/null -w '%{http_code}' "${BASE}/api/hole/${doomed}/requests")
+  if [ "$gone_code" = "404" ]; then
+    pass "deleted hole's requests -> 404"
+  else
+    fail "deleted hole's requests -> ${gone_code} (expected 404)"
+  fi
+else
+  fail "deleted-hole check — could not create a hole"
+fi
+
+# 3e) Dot-segment paths are refused. nginx normalizes `/addr/../api/x` (and
+#     `/addr/..%2Fapi/x`, decoding the slash first) to pick its /api/
+#     location but forwards the raw path; unrefused, it would land in the
+#     hole around every upload cap on the collect location.
+if [ -n "$addr" ]; then
+  for dot_path in "/${addr}/../api/x" "/${addr}/..%2Fapi/x"; do
+    before=$(curl -s "${BASE}/api/hole/${addr}/requests" | grep -o '"request_address"' | wc -l)
+    dot_code=$(curl -s --path-as-is -o /dev/null -w '%{http_code}' -X POST "${BASE}${dot_path}" --data 'x')
+    after=$(curl -s "${BASE}/api/hole/${addr}/requests" | grep -o '"request_address"' | wc -l)
+    if [ "$dot_code" = "404" ] && [ "$before" -eq "$after" ]; then
+      pass "POST ${dot_path} refused (404), nothing captured"
+    else
+      fail "POST ${dot_path} -> ${dot_code}, captures ${before} -> ${after}"
+    fi
+  done
+else
+  fail "dot-segment check — skipped, no address"
+fi
+
+# 3f) nginx caps bodies on /api/*, where no route takes one. Sent to a route
+#     that cannot create anything, so a regressed cap leaves nothing behind.
+api_body_code=$(head -c 32768 /dev/zero | tr '\0' 'x' | curl -s -o /dev/null -w '%{http_code}' \
+  -X POST "${BASE}/api/holes" -H 'Content-Type: text/plain' --data-binary @-)
+if [ "$api_body_code" = "413" ]; then
+  pass "32 KiB body to /api/holes -> 413 at nginx"
+else
+  fail "32 KiB body to /api/holes -> ${api_body_code} (expected 413)"
 fi
 
 # 4) Root serves the SPA index.html.

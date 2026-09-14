@@ -14,6 +14,12 @@ type StubSource = {
   onopen: (() => void) | null;
   onmessage: ((event: MessageEvent) => void) | null;
   onerror: (() => void) | null;
+  addEventListener: (
+    type: string,
+    listener: (event: MessageEvent) => void,
+  ) => void;
+  /** Named-event listeners the hook registered, by event type. */
+  listeners: Record<string, ((event: MessageEvent) => void)[]>;
   close: () => void;
   closed: boolean;
 };
@@ -28,7 +34,11 @@ function StubEventSource(url: string): StubSource {
     onmessage: null,
     onerror: null,
     closed: false,
+    listeners: {},
   } as StubSource;
+  source.addEventListener = (type, listener) => {
+    (source.listeners[type] ??= []).push(listener);
+  };
   source.close = vi.fn(() => {
     source.closed = true;
   });
@@ -88,6 +98,54 @@ describe("useHoleStream", () => {
     expect(onMessage).toHaveBeenCalledExactlyOnceWith(
       '{"request_address":"req001"}',
     );
+  });
+
+  it("hands a delete frame to the caller on its own channel", () => {
+    const onMessage = vi.fn();
+    const onDelete = vi.fn();
+    renderHook(() =>
+      useHoleStream({
+        holeAddress: "abc123",
+        onMessage,
+        onDelete,
+        onOpen: vi.fn(),
+      }),
+    );
+
+    act(() => {
+      for (const listener of latest().listeners["delete"] ?? []) {
+        listener({ data: '{"request_address":"req001"}' } as MessageEvent);
+      }
+    });
+
+    expect(onDelete).toHaveBeenCalledExactlyOnceWith(
+      '{"request_address":"req001"}',
+    );
+    // A deletion is not a row to render.
+    expect(onMessage).not.toHaveBeenCalled();
+  });
+
+  it("tells the caller when the hole itself is gone", () => {
+    const onHoleDeleted = vi.fn();
+    const onDelete = vi.fn();
+    renderHook(() =>
+      useHoleStream({
+        holeAddress: "abc123",
+        onMessage: vi.fn(),
+        onDelete,
+        onHoleDeleted,
+        onOpen: vi.fn(),
+      }),
+    );
+
+    act(() => {
+      for (const listener of latest().listeners["hole-deleted"] ?? []) {
+        listener({ data: '{"hole_address":"abc123"}' } as MessageEvent);
+      }
+    });
+
+    expect(onHoleDeleted).toHaveBeenCalledOnce();
+    expect(onDelete).not.toHaveBeenCalled();
   });
 
   // The old code closed on error and stopped there: the tail died silently and

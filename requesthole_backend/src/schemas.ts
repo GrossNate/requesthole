@@ -6,7 +6,7 @@ const RequestSansBody = z.object({
   method: z.string(),
   request_path: z.string(),
   query_params: z.string(),
-  headers: z.string()
+  headers: z.string(),
 });
 
 type RequestSansBody = z.infer<typeof RequestSansBody>;

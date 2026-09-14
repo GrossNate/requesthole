@@ -1,9 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import holeService from "./services";
 import App from "./App";
+import { HoleLimitError } from "./errors";
 
 vi.mock("./services", () => ({
   default: {
@@ -17,7 +18,12 @@ vi.mock("./services", () => ({
 }));
 
 function StubEventSource() {
-  return { onmessage: null, onerror: null, close: vi.fn() };
+  return {
+    onmessage: null,
+    onerror: null,
+    addEventListener: vi.fn(),
+    close: vi.fn(),
+  };
 }
 vi.stubGlobal("EventSource", StubEventSource);
 
@@ -106,6 +112,10 @@ describe("creating a hole after a failed load", () => {
     await user.click(screen.getByRole("button", { name: /create hole/i }));
 
     expect(screen.getByText(/couldn't load your holes/i)).toBeVisible();
+    // And the click is answered: the create says it failed.
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /couldn't create a hole/i,
+    );
   });
 
   it("clears the failed state once a hole is created", async () => {
@@ -131,5 +141,263 @@ describe("creating a hole after a failed load", () => {
       screen.queryByText(/couldn't load your holes/i),
     ).not.toBeInTheDocument();
     expect(screen.getByRole("table")).toBeInTheDocument();
+  });
+});
+
+// Creating can now be refused on purpose: a client at its share of live holes
+// or its hourly budget gets 429, and a deployment at its ceiling gets 503. A
+// refusal used to land in the same catch as an outage, which swapped a list
+// that loaded fine for "The backend didn't answer".
+describe("a hole creation that is refused", () => {
+  const renderLoaded = async () => {
+    vi.mocked(holeService.getHoles).mockResolvedValue([
+      { hole_address: "abc123" },
+    ]);
+    render(
+      <MemoryRouter>
+        <App />
+      </MemoryRouter>,
+    );
+    await screen.findByRole("table");
+  };
+
+  it("keeps the list and says a limit was hit", async () => {
+    const user = userEvent.setup();
+    vi.mocked(holeService.addHole).mockRejectedValue(
+      new HoleLimitError("share"),
+    );
+    await renderLoaded();
+
+    await user.click(screen.getByRole("button", { name: /create hole/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/limit/i);
+    expect(screen.getByRole("table")).toBeVisible();
+    expect(
+      screen.queryByText(/couldn't load your holes/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("tells a client at its share to delete a hole", async () => {
+    const user = userEvent.setup();
+    vi.mocked(holeService.addHole).mockRejectedValue(
+      new HoleLimitError("share"),
+    );
+    await renderLoaded();
+
+    await user.click(screen.getByRole("button", { name: /create hole/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/delete/i);
+  });
+
+  // Deleting frees nothing against the hourly limit, so the page must not
+  // send the reader off to delete holes; it says how long to wait instead.
+  it("tells a client at the hourly limit to wait, not to delete", async () => {
+    const user = userEvent.setup();
+    vi.mocked(holeService.addHole).mockRejectedValue(
+      new HoleLimitError("rate-limit", 1800),
+    );
+    await renderLoaded();
+
+    await user.click(screen.getByRole("button", { name: /create hole/i }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/30 minutes/i);
+    expect(alert).not.toHaveTextContent(/delete/i);
+  });
+
+  // The refusal describes a moment. Once the reader acts on it, or leaves,
+  // it is no longer true, and a stale "you're at the limit" is misleading.
+  it("drops the message once the reader deletes a hole", async () => {
+    const user = userEvent.setup();
+    vi.mocked(holeService.addHole).mockRejectedValue(
+      new HoleLimitError("share"),
+    );
+    vi.mocked(holeService.deleteHole).mockResolvedValue(true);
+    await renderLoaded();
+    await user.click(screen.getByRole("button", { name: /create hole/i }));
+    await screen.findByRole("alert");
+
+    await user.click(screen.getByRole("button", { name: /delete/i }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
+    );
+  });
+
+  it("drops the message once the reader leaves the page", async () => {
+    const user = userEvent.setup();
+    vi.mocked(holeService.addHole).mockRejectedValue(
+      new HoleLimitError("share"),
+    );
+    await renderLoaded();
+    await user.click(screen.getByRole("button", { name: /create hole/i }));
+    await screen.findByRole("alert");
+
+    await user.click(
+      within(screen.getByRole("table")).getByRole("link", { name: "abc123" }),
+    );
+    await screen.findByRole("heading", { level: 1, name: /Hole abc123/i });
+    await user.click(screen.getByRole("link", { name: "Home" }));
+
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  // Deleting frees a share slot and nothing else. Clearing an hourly-limit
+  // message on delete would throw away the wait it names, and the next
+  // create would be refused all the same.
+  it("keeps an hourly-limit message when the reader deletes a hole", async () => {
+    const user = userEvent.setup();
+    vi.mocked(holeService.addHole).mockRejectedValue(
+      new HoleLimitError("rate-limit", 1800),
+    );
+    vi.mocked(holeService.deleteHole).mockResolvedValue(true);
+    await renderLoaded();
+    await user.click(screen.getByRole("button", { name: /create hole/i }));
+    await screen.findByRole("alert");
+
+    await user.click(screen.getByRole("button", { name: /delete/i }));
+    await waitFor(() =>
+      expect(screen.queryByRole("table")).not.toBeInTheDocument(),
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent(/30 minutes/i);
+  });
+
+  // The reader clicked Create and moved on before the answer came. The
+  // refusal must wait for them rather than be lost, or flash and vanish.
+  it("shows a refusal that landed while the reader was on another page", async () => {
+    const user = userEvent.setup();
+    let refuse: (error: Error) => void = () => {};
+    vi.mocked(holeService.addHole).mockReturnValue(
+      new Promise((_, reject) => {
+        refuse = reject;
+      }),
+    );
+    await renderLoaded();
+    await user.click(screen.getByRole("button", { name: /create hole/i }));
+
+    await user.click(
+      within(screen.getByRole("table")).getByRole("link", { name: "abc123" }),
+    );
+    await screen.findByRole("heading", { level: 1, name: /Hole abc123/i });
+    await act(async () => {
+      refuse(new HoleLimitError("share"));
+    });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("link", { name: "Home" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/delete/i);
+  });
+
+  // An hourly-limit message that waited for the reader must still be true
+  // when it finally shows: the wait it names has been running meanwhile.
+  describe("an hourly-limit message that waited for the reader", () => {
+    const refuseWhileAway = async (minutesAway: number) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const user = userEvent.setup();
+      let refuse: (error: Error) => void = () => {};
+      vi.mocked(holeService.addHole).mockReturnValue(
+        new Promise((_, reject) => {
+          refuse = reject;
+        }),
+      );
+      await renderLoaded();
+      await user.click(screen.getByRole("button", { name: /create hole/i }));
+      await user.click(
+        within(screen.getByRole("table")).getByRole("link", {
+          name: "abc123",
+        }),
+      );
+      await screen.findByRole("heading", { level: 1, name: /Hole abc123/i });
+      await act(async () => {
+        refuse(new HoleLimitError("rate-limit", 1800));
+      });
+      vi.advanceTimersByTime(minutesAway * 60 * 1000);
+      await user.click(screen.getByRole("link", { name: "Home" }));
+      await screen.findByRole("table");
+    };
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("counts down the wait while the reader was away", async () => {
+      await refuseWhileAway(10);
+      expect(screen.getByRole("alert")).toHaveTextContent(/20 minutes/i);
+    });
+
+    it("is dropped once the wait has passed", async () => {
+      await refuseWhileAway(40);
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+  });
+
+  // The Create button stays live while a create is out. When a newer create
+  // has already succeeded, an older one failing says nothing current.
+  it("ignores the failure of a create that a newer one superseded", async () => {
+    const user = userEvent.setup();
+    let failFirst: (error: Error) => void = () => {};
+    vi.mocked(holeService.addHole)
+      .mockReturnValueOnce(
+        new Promise((_, reject) => {
+          failFirst = reject;
+        }),
+      )
+      .mockResolvedValueOnce([{ hole_address: "zzz999" }]);
+    await renderLoaded();
+
+    await user.click(screen.getByRole("button", { name: /create hole/i }));
+    await user.click(screen.getByRole("button", { name: /create hole/i }));
+    await screen.findByRole("heading", { level: 1, name: /Hole zzz999/i });
+    await act(async () => {
+      failFirst(new Error("offline"));
+    });
+    await user.click(screen.getByRole("link", { name: "Home" }));
+    await screen.findByRole("table");
+
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("says the deployment is full when the ceiling refuses it", async () => {
+    const user = userEvent.setup();
+    vi.mocked(holeService.addHole).mockRejectedValue(
+      new HoleLimitError("full"),
+    );
+    await renderLoaded();
+
+    await user.click(screen.getByRole("button", { name: /create hole/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/full/i);
+    expect(screen.getByRole("table")).toBeVisible();
+  });
+
+  it("says the create failed, without hiding the list, when the backend is down", async () => {
+    const user = userEvent.setup();
+    vi.mocked(holeService.addHole).mockRejectedValue(new Error("offline"));
+    await renderLoaded();
+
+    await user.click(screen.getByRole("button", { name: /create hole/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /couldn't create a hole/i,
+    );
+    expect(screen.getByRole("table")).toBeVisible();
+  });
+
+  it("clears the message once a create succeeds", async () => {
+    const user = userEvent.setup();
+    vi.mocked(holeService.addHole)
+      .mockRejectedValueOnce(new HoleLimitError("share"))
+      .mockResolvedValueOnce([{ hole_address: "zzz999" }]);
+    await renderLoaded();
+
+    await user.click(screen.getByRole("button", { name: /create hole/i }));
+    await screen.findByRole("alert");
+    await user.click(screen.getByRole("button", { name: /create hole/i }));
+    await screen.findByRole("heading", { level: 1, name: /Hole zzz999/i });
+    await user.click(screen.getByRole("link", { name: "Home" }));
+
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

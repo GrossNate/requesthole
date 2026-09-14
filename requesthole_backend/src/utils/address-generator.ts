@@ -4,7 +4,8 @@ import base62 from "base62";
 
 // crc32 is a 32-bit unsigned value, so its base62 encoding is at most 6 chars
 // (62^5 < 2^32 < 62^6). Left-pad with base62 zeros to guarantee a fixed 6-char
-// address — the collect route and its Nginx mirror both match exactly ^[a-zA-Z0-9]{6}$.
+// address — the collect route and its Nginx mirror both match a first path
+// segment of exactly ^[a-zA-Z0-9]{6}$, with any sub-path allowed beneath it.
 export const ADDRESS_LENGTH = 6;
 
 function generateAddress() {

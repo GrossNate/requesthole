@@ -10,6 +10,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, Link } from "react-router-dom";
 import type { RequestObject } from "../types";
+import { HoleGoneError } from "../errors";
 import holeService from "../services";
 import { formatTimestamp } from "../utils/format";
 import Hole from "./Hole";
@@ -39,6 +40,12 @@ type StubEventSource = {
   onopen: (() => void) | null;
   onmessage: ((event: MessageEvent) => void) | null;
   onerror: (() => void) | null;
+  addEventListener: (
+    type: string,
+    listener: (event: MessageEvent) => void,
+  ) => void;
+  /** Named-event listeners the hook registered, by event type. */
+  listeners: Record<string, ((event: MessageEvent) => void)[]>;
   close: () => void;
 };
 const eventSourceUrls: string[] = [];
@@ -49,16 +56,35 @@ let lastEventSource: StubEventSource | null = null;
 // an object makes that construction yield the stub.
 function StubEventSource(url: string): StubEventSource {
   eventSourceUrls.push(url);
+  const listeners: StubEventSource["listeners"] = {};
   lastEventSource = {
     onopen: null,
     onmessage: null,
     onerror: null,
+    addEventListener: (type, listener) => {
+      (listeners[type] ??= []).push(listener);
+    },
+    listeners,
     close: vi.fn(),
   };
   openedSources.push(lastEventSource);
   return lastEventSource;
 }
 vi.stubGlobal("EventSource", StubEventSource);
+
+// The server's word that the hole itself is gone.
+const streamHoleDeleted = (hole_address: string) => {
+  for (const listener of lastEventSource!.listeners["hole-deleted"] ?? []) {
+    listener({ data: JSON.stringify({ hole_address }) } as MessageEvent);
+  }
+};
+
+// The server's delete frame, as the hook would receive it.
+const streamDelete = (request_address: string) => {
+  for (const listener of lastEventSource!.listeners["delete"] ?? []) {
+    listener({ data: JSON.stringify({ request_address }) } as MessageEvent);
+  }
+};
 
 const capturedRequest = (
   overrides: Partial<RequestObject> = {},
@@ -1177,6 +1203,209 @@ describe("Hole snapshot reconciliation", () => {
     });
 
     expect(screen.queryByText("/doomed")).not.toBeInTheDocument();
+  });
+});
+
+// Only a snapshot could notice a deletion before, and a stream that never
+// drops never takes one — so a row deleted in another tab, evicted by the
+// hole's cap, or swept by retention stayed on screen indefinitely.
+describe("Hole stream deletes", () => {
+  it("drops a row the stream says is gone, without waiting for a snapshot", async () => {
+    const gone = capturedRequest({
+      request_address: "gone01",
+      request_path: "/gone",
+    });
+    vi.mocked(holeService.getRequests).mockResolvedValue([
+      capturedRequest(),
+      gone,
+    ]);
+    renderHole();
+    await screen.findByText("/gone");
+
+    act(() => streamDelete("gone01"));
+
+    expect(screen.queryByText("/gone")).not.toBeInTheDocument();
+    expect(screen.getByText("/abc123")).toBeVisible();
+    expect(holeService.getRequests).toHaveBeenCalledTimes(1);
+  });
+
+  it("navigates back to the list when the open request goes away", async () => {
+    vi.mocked(holeService.getRequests).mockResolvedValue([capturedRequest()]);
+    renderHoleAt("/view/abc123/req001");
+    await screen.findByRole("link", { name: "/abc123" });
+
+    act(() => streamDelete("req001"));
+
+    expect(navigateSpy).toHaveBeenCalledWith("/view/abc123", {
+      replace: true,
+    });
+  });
+
+  it("does not resurrect a stream-deleted request with an older snapshot", async () => {
+    const doomed = capturedRequest({
+      request_address: "doomed",
+      request_path: "/doomed",
+    });
+    vi.mocked(holeService.getRequests).mockResolvedValue([
+      capturedRequest(),
+      doomed,
+    ]);
+    renderHole();
+    await screen.findByText("/doomed");
+
+    let resolveStale: (requests: RequestObject[]) => void = () => {};
+    vi.mocked(holeService.getRequests).mockReturnValue(
+      new Promise((resolve) => {
+        resolveStale = resolve;
+      }),
+    );
+    await act(async () => {
+      lastEventSource!.onopen!();
+    });
+
+    act(() => streamDelete("doomed"));
+    expect(screen.queryByText("/doomed")).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveStale([capturedRequest(), doomed]);
+    });
+
+    expect(screen.queryByText("/doomed")).not.toBeInTheDocument();
+  });
+
+  // A tombstone only has to outlive the snapshot that was in flight when the
+  // row went. Kept forever, the set grows with every eviction on a busy hole,
+  // and it hides any later request that is issued the same address.
+  it("shows a reissued address once no snapshot predates its deletion", async () => {
+    vi.mocked(holeService.getRequests).mockResolvedValue([capturedRequest()]);
+    renderHole();
+    await screen.findByText("/abc123");
+
+    act(() => streamDelete("req001"));
+    expect(screen.queryByText("/abc123")).not.toBeInTheDocument();
+
+    // A later snapshot, asked for after the delete: the address is live again.
+    vi.mocked(holeService.getRequests).mockResolvedValue([
+      capturedRequest({ request_path: "/reissued" }),
+    ]);
+    await act(async () => {
+      lastEventSource!.onopen!();
+    });
+
+    expect(await screen.findByText("/reissued")).toBeVisible();
+  });
+
+  it("lets a tombstone go once the snapshot it guarded against has landed", async () => {
+    vi.mocked(holeService.getRequests).mockResolvedValue([capturedRequest()]);
+    renderHole();
+    await screen.findByText("/abc123");
+
+    let resolveStale: (requests: RequestObject[]) => void = () => {};
+    vi.mocked(holeService.getRequests).mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveStale = resolve;
+      }),
+    );
+    await act(async () => {
+      lastEventSource!.onopen!();
+    });
+    act(() => streamDelete("req001"));
+    await act(async () => {
+      resolveStale([capturedRequest()]);
+    });
+    // The stale snapshot predates the delete, so its copy stays out.
+    expect(screen.queryByText("/abc123")).not.toBeInTheDocument();
+
+    vi.mocked(holeService.getRequests).mockResolvedValue([
+      capturedRequest({ request_path: "/reissued" }),
+    ]);
+    await act(async () => {
+      lastEventSource!.onopen!();
+    });
+
+    expect(await screen.findByText("/reissued")).toBeVisible();
+  });
+
+  it("ignores a delete for a row it never had", async () => {
+    vi.mocked(holeService.getRequests).mockResolvedValue([capturedRequest()]);
+    renderHole();
+    await screen.findByText("/abc123");
+
+    act(() => streamDelete("nosuch"));
+
+    expect(screen.getByText("/abc123")).toBeVisible();
+  });
+});
+
+// A hole swept by retention or deleted in another tab used to leave its
+// viewers on an empty hole still reading Live, whose capture URL now 404s.
+describe("Hole that no longer exists", () => {
+  it("says so when the stream reports the hole deleted", async () => {
+    vi.mocked(holeService.getRequests).mockResolvedValue([capturedRequest()]);
+    renderHole();
+    await screen.findByText("/abc123");
+    act(() => lastEventSource!.onopen!());
+
+    act(() => streamHoleDeleted("abc123"));
+
+    expect(screen.getByText(/no longer exists/i)).toBeVisible();
+    expect(screen.queryByText("/abc123")).not.toBeInTheDocument();
+    // Nothing is live, and there is no longer a URL worth copying.
+    expect(screen.queryByText(/^live$/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /copy url/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: /back to all holes/i }),
+    ).toBeVisible();
+  });
+
+  it("closes the stream once the hole is gone", async () => {
+    vi.mocked(holeService.getRequests).mockResolvedValue([]);
+    renderHole();
+    await screen.findByText(/no requests captured yet/i);
+    const source = lastEventSource!;
+
+    act(() => streamHoleDeleted("abc123"));
+
+    expect(source.close).toHaveBeenCalled();
+  });
+
+  // The viewer that missed the frame: it reconnects, and the snapshot is
+  // what finds the hole gone.
+  it("says so when a snapshot finds no hole, without retrying", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.mocked(holeService.getRequests).mockRejectedValue(new HoleGoneError());
+    renderHole();
+
+    expect(await screen.findByText(/no longer exists/i)).toBeVisible();
+    expect(
+      screen.queryByText(/couldn't load this hole's requests/i),
+    ).not.toBeInTheDocument();
+
+    await act(async () => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(holeService.getRequests).toHaveBeenCalledTimes(1);
+    // Terminal on this path too: nothing left on the stream to follow.
+    expect(lastEventSource!.close).toHaveBeenCalled();
+  });
+
+  // A failed snapshot schedules a retry. If the hole goes before it fires,
+  // the retry must not ask after a hole that no longer exists.
+  it("drops a pending snapshot retry when the hole goes", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.mocked(holeService.getRequests).mockRejectedValue(new Error("offline"));
+    renderHole();
+    await screen.findByText(/couldn't load this hole's requests/i);
+
+    act(() => streamHoleDeleted("abc123"));
+    await act(async () => {
+      vi.advanceTimersByTime(60_000);
+    });
+
+    expect(holeService.getRequests).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/no longer exists/i)).toBeVisible();
   });
 });
 

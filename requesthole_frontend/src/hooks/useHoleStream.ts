@@ -33,6 +33,18 @@ export type HoleStreamOptions = {
   holeAddress: string;
   onMessage: (data: string) => void;
   /**
+   * Called with the payload of a `delete` frame — the server's word that a
+   * request is gone, because a user removed it or the hole's cap evicted it.
+   * Its own channel, since the default one carries rows. A whole hole going
+   * (deleted, or swept by retention) arrives on `onHoleDeleted` instead.
+   */
+  onDelete?: (data: string) => void;
+  /**
+   * Called when a `hole-deleted` frame arrives: the hole itself is gone,
+   * deleted or swept by retention. The caller should stop following it.
+   */
+  onHoleDeleted?: () => void;
+  /**
    * Called every time the stream opens. Captures that landed while nothing was
    * subscribed reach no client, so the caller re-fetches its list here — after
    * the first open as well as later ones, since the caller's own initial query
@@ -44,6 +56,8 @@ export type HoleStreamOptions = {
 export const useHoleStream = ({
   holeAddress,
   onMessage,
+  onDelete,
+  onHoleDeleted,
   onOpen,
 }: HoleStreamOptions): ConnectionState => {
   const [connectionState, setConnectionState] =
@@ -54,9 +68,13 @@ export const useHoleStream = ({
   // effect rather than during render, so a render React discards cannot leave
   // its handler behind.
   const onMessageRef = useRef(onMessage);
+  const onDeleteRef = useRef(onDelete);
+  const onHoleDeletedRef = useRef(onHoleDeleted);
   const onOpenRef = useRef(onOpen);
   useEffect(() => {
     onMessageRef.current = onMessage;
+    onDeleteRef.current = onDelete;
+    onHoleDeletedRef.current = onHoleDeleted;
     onOpenRef.current = onOpen;
   });
 
@@ -98,6 +116,10 @@ export const useHoleStream = ({
         }, STABLE_MS);
       };
       mine.onmessage = (event) => onMessageRef.current(event.data);
+      mine.addEventListener("delete", (event) =>
+        onDeleteRef.current?.(event.data as string),
+      );
+      mine.addEventListener("hole-deleted", () => onHoleDeletedRef.current?.());
       mine.onerror = () => {
         // Not the connection we are on. Either this source has already been
         // dealt with — a second error from one EventSource is still one failed

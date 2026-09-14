@@ -12,6 +12,7 @@ const Home: React.FC<HomeBlockProps> = ({
   createHole,
   reloadHoles,
   loadState,
+  createError,
 }) => {
   const handleDeleteHole = (hole_address: string) => {
     const handler: MouseEventHandler = (event) => {
@@ -148,6 +149,29 @@ const Home: React.FC<HomeBlockProps> = ({
         </div>
         {holes.length > 0 ? createButton() : null}
       </div>
+
+      {/* Beside the button that caused it, and above the list it leaves
+          alone: a refused or failed create says nothing about the holes. */}
+      {createError ? (
+        <p
+          role="alert"
+          className="border-error/40 bg-error/10 text-body text-base-content/80 px-gutter py-tight rounded-box border"
+        >
+          {createError}
+        </p>
+      ) : null}
+
+      <p
+        role="note"
+        className="border-warning/40 bg-warning/10 text-body text-base-content/80 px-gutter py-tight rounded-box border"
+      >
+        <span className="text-warning font-semibold">
+          Use at your own risk.
+        </span>{" "}
+        Holes are public: every hole is listed here, and anyone can read the
+        requests captured in it. Do not send real credentials, tokens, or
+        personal data to a hole.
+      </p>
 
       {listing()}
     </div>

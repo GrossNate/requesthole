@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, memo } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import holeService from "../services";
 import { type RequestObject, type LoadState } from "../types";
+import { HoleGoneError } from "../errors";
 import { useHoleStream, type ConnectionState } from "../hooks/useHoleStream";
 import { formatQueryParams, formatTimestamp } from "../utils/format";
 import { holeCaptureUrl } from "../utils/holeUrl";
@@ -176,6 +177,10 @@ const HoleView = ({
 }) => {
   const [holeRequests, setHoleRequests] = useState<RequestObject[]>([]);
   const [loadState, setLoadState] = useState<LoadState>("loading");
+  // The hole was deleted or swept by retention. Terminal: nothing here will
+  // bring it back, so the view stops following it and says so.
+  const [gone, setGone] = useState(false);
+  const goneRef = useRef(false);
   const navigate = useNavigate();
   const holeFullUrl = holeCaptureUrl(holeAddress);
 
@@ -201,17 +206,21 @@ const HoleView = ({
   // same question — the answer can be legitimately empty.
   const everLoaded = useRef(false);
 
-  // Captures the stream delivered since the current snapshot was requested.
-  // The snapshot is authoritative about what the hole contains *as of when it
-  // was taken*, which is how a request deleted in another tab finally leaves
-  // this list — but it knows nothing about these, which are newer than it.
+  // Captures the stream delivered while the current snapshot is out. The
+  // snapshot is authoritative about what the hole contains *as of when it was
+  // taken*, which is how a request deleted in another tab finally leaves this
+  // list — but it knows nothing about these, which are newer than it. Only
+  // kept while a snapshot is pending: with none out there is nothing for them
+  // to outlive, and on a stream that never drops they would pile up forever.
   const streamedSince = useRef<RequestObject[]>([]);
 
-  // Deleting is the one thing the reader does that a snapshot can undo. A
-  // request deleted while a snapshot was in flight is still in that snapshot's
-  // rows, and merging them would put it back — clickable, and gone from the
-  // backend. Discarded addresses are remembered for as long as this hole is on
-  // screen so no snapshot can reintroduce one.
+  // Requests that went while a snapshot was in flight. That snapshot may
+  // still carry them, and merging its rows would put them back — clickable,
+  // and gone from the backend. Only such a snapshot can do that: one asked for
+  // after the deletion never contains the row. So a tombstone is added only
+  // while a snapshot is pending and cleared when it settles. Kept forever,
+  // the set grew with every eviction on a busy hole and hid any later request
+  // issued the same address.
   const deleted = useRef(new Set<string>());
 
   // Read at resolve time, not capture time: a DELETE settles a render or two
@@ -241,9 +250,19 @@ const HoleView = ({
     };
   }, []);
 
+  // Reached two ways: the stream's `hole-deleted` frame, or a snapshot that
+  // finds no hole (the viewer was disconnected when the frame went out). The
+  // ref stops a queued re-sync or a scheduled retry from asking again.
+  const markGone = useCallback(() => {
+    goneRef.current = true;
+    clearTimeout(retryTimer.current);
+    setHoleRequests([]);
+    setGone(true);
+  }, []);
+
   const loadRequests = useCallback(
     function run() {
-      if (!addressIsValid) return;
+      if (!addressIsValid || goneRef.current) return;
       if (snapshotPending.current) {
         resyncQueued.current = true;
         return;
@@ -279,6 +298,11 @@ const HoleView = ({
           setLoadState("loaded");
         })
         .catch((error) => {
+          // Not a failure to retry: there is no hole left to load.
+          if (error instanceof HoleGoneError) {
+            if (mounted.current) markGone();
+            return;
+          }
           console.error(error);
           // Rows already on screen survive a failed re-sync. They are the last
           // captures we know about and still worth reading; the connection badge
@@ -302,21 +326,50 @@ const HoleView = ({
         })
         .finally(() => {
           snapshotPending.current = false;
+          // The snapshot these guarded against has landed or failed. Any
+          // later one is asked for after the deletions, so it cannot carry
+          // the rows back.
+          deleted.current.clear();
           if (resyncQueued.current) {
             resyncQueued.current = false;
             if (mounted.current) run();
           }
         });
     },
-    [holeAddress, addressIsValid],
+    [holeAddress, addressIsValid, markGone],
   );
 
   useEffect(() => {
     loadRequests();
   }, [loadRequests]);
 
+  // One exit for a row, whoever took it: the reader's own delete, or the
+  // server's word that another tab or the hole's cap did. (Retention takes
+  // the whole hole, which is `markGone`, not this.) While a snapshot is out,
+  // a tombstone outlives the row so that snapshot cannot put it back (the
+  // merge filters `streamedSince` through the same set).
+  const dropRequest = useCallback(
+    (request_address: string) => {
+      if (snapshotPending.current) deleted.current.add(request_address);
+      // The pane is showing the record that was just deleted, and the URL
+      // points at it. Replace rather than push: Back should not return to a
+      // request that no longer exists.
+      if (request_address === selectedRef.current) {
+        navigate(`/view/${holeAddress}`, { replace: true });
+      }
+      setHoleRequests((prevRequests) =>
+        prevRequests.filter(
+          (request) => request.request_address !== request_address,
+        ),
+      );
+    },
+    [navigate, holeAddress],
+  );
+
   const connectionState = useHoleStream({
-    holeAddress,
+    // Not an address once the hole is gone, which holds the stream closed:
+    // there is nothing left on it to follow.
+    holeAddress: gone ? "" : holeAddress,
     onMessage: useCallback((data: string) => {
       const captured = JSON.parse(data) as RequestObject;
       // The stream delivering this address is proof the backend has it now,
@@ -326,7 +379,7 @@ const HoleView = ({
       deleted.current.delete(captured.request_address);
       // Kept aside as well as shown, so the snapshot that is currently out
       // cannot remove a capture that postdates it.
-      streamedSince.current.push(captured);
+      if (snapshotPending.current) streamedSince.current.push(captured);
       // Appended, not merged through a fresh Map of the whole list: this runs
       // once per capture on a hole that may be receiving them in bursts.
       setHoleRequests((prev) => {
@@ -339,6 +392,16 @@ const HoleView = ({
         return next;
       });
     }, []),
+    onDelete: useCallback(
+      (data: string) => {
+        const { request_address } = JSON.parse(data) as {
+          request_address: string;
+        };
+        dropRequest(request_address);
+      },
+      [dropRequest],
+    ),
+    onHoleDeleted: markGone,
     // Whatever landed while nothing was subscribed is on no stream anyone was
     // reading, so a snapshot is the only way those captures ever appear.
     onOpen: loadRequests,
@@ -365,24 +428,11 @@ const HoleView = ({
           // A delete the backend refused — the request was already gone, or the
           // call failed — must not close the pane or leave a tombstone behind
           // for a row that is still there.
-          if (isDeleted) {
-            deleted.current.add(request_address);
-            // The pane is showing the record that was just deleted, and the
-            // URL points at it. Replace rather than push: Back should not
-            // return to a request that no longer exists.
-            if (request_address === selectedRef.current) {
-              navigate(`/view/${holeAddress}`, { replace: true });
-            }
-            setHoleRequests((prevRequests) =>
-              prevRequests.filter(
-                (request) => request.request_address !== request_address,
-              ),
-            );
-          }
+          if (isDeleted) dropRequest(request_address);
         })
         .catch((error) => console.error(error));
     },
-    [navigate, holeAddress],
+    [dropRequest],
   );
 
   const shared = Boolean(selectedAddress);
@@ -545,52 +595,70 @@ const HoleView = ({
           <h1 className="page-title">
             Hole <span className="text-primary address">{holeAddress}</span>
           </h1>
-          <ConnectionBadge state={connectionState} />
+          {gone ? null : <ConnectionBadge state={connectionState} />}
         </div>
-        <div className="border-base-300 bg-base-200/50 gap-snug px-gutter py-tight rounded-box flex flex-wrap items-center border">
-          <span className="section-label">Capture URL</span>
-          <code className="address text-secondary grow overflow-x-auto">
-            {holeFullUrl}
-          </code>
-          <CopyButton value={holeFullUrl} label="Copy URL" />
-        </div>
+        {/* A capture URL for a hole that is gone only 404s: not worth copying. */}
+        {gone ? null : (
+          <div className="border-base-300 bg-base-200/50 gap-snug px-gutter py-tight rounded-box flex flex-wrap items-center border">
+            <span className="section-label">Capture URL</span>
+            <code className="address text-secondary grow overflow-x-auto">
+              {holeFullUrl}
+            </code>
+            <CopyButton value={holeFullUrl} label="Copy URL" />
+          </div>
+        )}
       </div>
 
-      {/* One column until a request is selected — an empty second column would
+      {gone ? (
+        <EmptyState
+          title="This hole no longer exists"
+          description="It was deleted, or it expired after the retention period. Its captured requests went with it, and nothing sent to its address is captured any more."
+        >
+          <Link to="/" className="btn btn-sm btn-primary">
+            Back to all holes
+          </Link>
+        </EmptyState>
+      ) : (
+        <>
+          {/* One column until a request is selected — an empty second column would
           just be the detail pane's silhouette with nothing in it. */}
-      {/* `grid-cols-1` is not the default it looks like: an implicit column is
+          {/* `grid-cols-1` is not the default it looks like: an implicit column is
           sized to its content, and mono tables happily run wider than a phone.
           Every track here is explicitly allowed to shrink. */}
-      <div
-        className={`gap-gutter grid min-h-0 min-w-0 flex-1 grid-cols-1 ${
-          selectedAddress ? "lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]" : ""
-        }`}
-      >
-        {/* Two panes side by side from `lg` up; below it there is only room
-            for one, so the selection decides which. */}
-        <section
-          aria-label="Captured requests"
-          className={`min-h-0 min-w-0 flex-col ${
-            selectedAddress ? "hidden lg:flex" : "flex"
-          }`}
-        >
-          {listing()}
-        </section>
-        {selectedAddress ? (
-          <section
-            aria-label="Request detail"
-            className="border-base-300 lg:ps-gutter gap-snug flex min-h-0 min-w-0 flex-col lg:border-s"
+          <div
+            className={`gap-gutter grid min-h-0 min-w-0 flex-1 grid-cols-1 ${
+              selectedAddress
+                ? "lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]"
+                : ""
+            }`}
           >
-            <Link
-              to={`/view/${holeAddress}`}
-              className="btn btn-sm btn-ghost text-body self-start lg:hidden"
+            {/* Two panes side by side from `lg` up; below it there is only room
+            for one, so the selection decides which. */}
+            <section
+              aria-label="Captured requests"
+              className={`min-h-0 min-w-0 flex-col ${
+                selectedAddress ? "hidden lg:flex" : "flex"
+              }`}
             >
-              ← All requests
-            </Link>
-            <Request />
-          </section>
-        ) : null}
-      </div>
+              {listing()}
+            </section>
+            {selectedAddress ? (
+              <section
+                aria-label="Request detail"
+                className="border-base-300 lg:ps-gutter gap-snug flex min-h-0 min-w-0 flex-col lg:border-s"
+              >
+                <Link
+                  to={`/view/${holeAddress}`}
+                  className="btn btn-sm btn-ghost text-body self-start lg:hidden"
+                >
+                  ← All requests
+                </Link>
+                <Request />
+              </section>
+            ) : null}
+          </div>
+        </>
+      )}
     </div>
   );
 };

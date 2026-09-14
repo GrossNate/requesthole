@@ -55,6 +55,24 @@ describe("RequestBroadcaster", () => {
     expect(elsewhere.sent).not.toHaveBeenCalled();
   });
 
+  it("sends a named delete frame carrying only the address", () => {
+    const broadcaster = new RequestBroadcaster();
+    const watching = subscriber();
+    const elsewhere = subscriber();
+    broadcaster.addClient("aaaaaa", watching.reply);
+    broadcaster.addClient("bbbbbb", elsewhere.reply);
+
+    broadcaster.broadcastDelete("aaaaaa", "req001");
+
+    // A named event, so it lands on a `delete` listener rather than on the
+    // capture channel, where a client would try to render it as a row.
+    expect(watching.sent).toHaveBeenCalledWith({
+      event: "delete",
+      data: JSON.stringify({ request_address: "req001" }),
+    });
+    expect(elsewhere.sent).not.toHaveBeenCalled();
+  });
+
   it("stops sending to a subscriber that has gone", () => {
     const broadcaster = new RequestBroadcaster();
     const leaving = subscriber();

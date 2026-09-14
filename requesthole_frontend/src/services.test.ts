@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import axios, { type AxiosProgressEvent } from "axios";
 import holeService from "./services";
+import { HoleGoneError, HoleLimitError } from "./errors";
 
 vi.mock("axios", () => ({
   default: { get: vi.fn(), post: vi.fn(), delete: vi.fn() },
@@ -98,5 +99,68 @@ describe("address handling", () => {
 
     expect(axios.get).not.toHaveBeenCalled();
     expect(axios.delete).not.toHaveBeenCalled();
+  });
+});
+
+describe("a hole that no longer exists", () => {
+  // A deleted or swept hole answers 404 for its requests, where a hole with
+  // nothing in it answers an empty list. The view needs to tell those apart,
+  // and a generic failure would only be retried forever.
+  it("reports a 404 snapshot as the hole being gone", async () => {
+    vi.mocked(axios.get).mockRejectedValue({ response: { status: 404 } });
+
+    await expect(holeService.getRequests("abc123")).rejects.toBeInstanceOf(
+      HoleGoneError,
+    );
+  });
+
+  it("still reports any other failure as a plain failure", async () => {
+    vi.mocked(axios.get).mockRejectedValue({ response: { status: 500 } });
+
+    const failure = holeService.getRequests("abc123");
+    await expect(failure).rejects.toBeDefined();
+    await expect(failure).rejects.not.toBeInstanceOf(HoleGoneError);
+  });
+});
+
+describe("a hole creation the backend refuses", () => {
+  // Two refusals answer 429. The hourly limiter names a wait in
+  // Retry-After; the per-client share does not, since deleting a hole is
+  // what frees it, not waiting.
+  it("reports a 429 without a wait as the per-client share", async () => {
+    vi.mocked(axios.post).mockRejectedValue({
+      response: { status: 429, headers: {} },
+    });
+
+    const refused = holeService.addHole();
+    await expect(refused).rejects.toBeInstanceOf(HoleLimitError);
+    await expect(refused).rejects.toMatchObject({ reason: "share" });
+  });
+
+  it("reports a 429 with a wait as the hourly limit, keeping the wait", async () => {
+    vi.mocked(axios.post).mockRejectedValue({
+      response: { status: 429, headers: { "retry-after": "1800" } },
+    });
+
+    await expect(holeService.addHole()).rejects.toMatchObject({
+      reason: "rate-limit",
+      retryAfterSeconds: 1800,
+    });
+  });
+
+  it("reports a 503 as the deployment being full", async () => {
+    vi.mocked(axios.post).mockRejectedValue({ response: { status: 503 } });
+
+    await expect(holeService.addHole()).rejects.toMatchObject({
+      reason: "full",
+    });
+  });
+
+  it("still reports any other failure as a plain failure", async () => {
+    vi.mocked(axios.post).mockRejectedValue({ response: { status: 500 } });
+
+    await expect(holeService.addHole()).rejects.not.toBeInstanceOf(
+      HoleLimitError,
+    );
   });
 });

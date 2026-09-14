@@ -1,4 +1,5 @@
 import axios from "axios";
+import { HoleGoneError, HoleLimitError } from "./errors";
 import type { RequestObject } from "./types";
 import { isAddress } from "./utils/address";
 
@@ -31,11 +32,30 @@ function addressPath(address: string): string {
 }
 
 async function addHole() {
-  const response = await axios.post(`${BASE_URL}/api/hole`);
-  if (response.status === 201) {
-    return response.data;
-  } else {
-    throw new Error(`Failed to create hole. Status: ${response.status}`);
+  try {
+    const response = await axios.post(`${BASE_URL}/api/hole`);
+    if (response.status === 201) {
+      return response.data;
+    } else {
+      throw new Error(`Failed to create hole. Status: ${response.status}`);
+    }
+  } catch (error) {
+    // Refusals are the backend working as designed, not failing: say which.
+    const response = (
+      error as {
+        response?: { status?: number; headers?: Record<string, unknown> };
+      } | null
+    )?.response;
+    if (response?.status === 429) {
+      // The hourly limiter names its wait; the share refusal never does.
+      const wait = Number(response.headers?.["retry-after"]);
+      if (Number.isFinite(wait) && wait > 0) {
+        throw new HoleLimitError("rate-limit", wait);
+      }
+      throw new HoleLimitError("share");
+    }
+    if (response?.status === 503) throw new HoleLimitError("full");
+    throw error;
   }
 }
 
@@ -87,6 +107,14 @@ async function getRequests(holeAddress: string): Promise<RequestObject[]> {
     } else {
       throw new Error("Failed to get requests.");
     }
+  } catch (error) {
+    // 404 means the hole is gone, where an empty hole answers []. Worth a
+    // type of its own: every other failure is retried, and this one never
+    // will succeed.
+    const status = (error as { response?: { status?: number } } | null)
+      ?.response?.status;
+    if (status === 404) throw new HoleGoneError();
+    throw error;
   } finally {
     clearTimeout(idle);
   }

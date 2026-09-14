@@ -12,6 +12,8 @@ export interface HomeBlockProps {
   createHole: () => void;
   reloadHoles: () => void;
   loadState: LoadState;
+  /** Why the last create did not happen, or null. Independent of the list. */
+  createError: string | null;
 }
 
 export interface RequestObject {

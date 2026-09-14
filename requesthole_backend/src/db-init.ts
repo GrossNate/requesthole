@@ -5,7 +5,11 @@ export default function initSchema(db: Database.Database) {
     CREATE TABLE IF NOT EXISTS holes (
       hole_id INTEGER PRIMARY KEY,
       hole_address TEXT NOT NULL UNIQUE,
-      created TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      created TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      -- The creating client, normalized as the rate limiter keys it. Counts
+      -- each client's live holes against MAX_HOLES_PER_IP; never returned by
+      -- any route, and swept with the hole.
+      creator_ip TEXT
     );
 
     CREATE TABLE IF NOT EXISTS requests (
@@ -19,5 +23,23 @@ export default function initSchema(db: Database.Database) {
       headers TEXT,
       body BLOB
     );
+
+    -- SQLite does not index foreign keys on its own. The insert-time trim and
+    -- the retention sweep both filter requests by hole, and the cascade on
+    -- hole delete walks this column too.
+    CREATE INDEX IF NOT EXISTS idx_requests_hole_id ON requests (hole_id);
   `);
+
+  // `CREATE TABLE IF NOT EXISTS` leaves an existing table alone, so a database
+  // from before the per-client share has no creator column. Its old holes
+  // stay NULL and count against nobody's share.
+  const holeColumns = db.prepare("PRAGMA table_info(holes)").all() as {
+    name: string;
+  }[];
+  if (!holeColumns.some((column) => column.name === "creator_ip")) {
+    db.exec("ALTER TABLE holes ADD COLUMN creator_ip TEXT");
+  }
+  db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_holes_creator_ip ON holes (creator_ip)",
+  );
 }
