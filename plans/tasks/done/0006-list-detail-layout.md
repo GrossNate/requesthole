@@ -368,8 +368,8 @@ in the tests:
   revert: files this branch touches are left Prettier-clean, and that file gained a 55-line test.
 - The listing-endpoint finding (`GET /api/holes` hands every address to anyone, and `crc32(uuidv4())`
   gives 2^32 of entropy rather than 62^6) is pre-existing, untouched here, and left alone. It is a
-  question about whether holes are meant to be private at all, which is 0008's remit, not a defect
-  in this branch.
+  question about whether holes are meant to be private at all, which is 0009's remit (the general
+  review, renumbered from 0008), not a defect in this branch.
 
 ### Round 7 — the majors
 

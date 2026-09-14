@@ -1,7 +1,7 @@
-# Task 0008: General review of the finished application
+# Task 0009: General review of the finished application
 
 **Branch**: `feature/general-review`
-**Depends on**: 0007 (reviews the application with all preceding work merged)
+**Depends on**: 0008 (reviews the application with all preceding work merged, ALLOW_MEDIA included)
 **Source**: talk-it-through 2026-07-25 · **User stories**: "I want to do a final, general review that
 looks for any other issues we should tackle."
 
@@ -22,7 +22,9 @@ Four lenses, all of them:
   coverage gaps, anything left over from earlier phases.
 - **Security** — the public attack surface: input validation, the untrusted-body invariant, SSE,
   resource exhaustion beyond what task 0007 bounded, dependency vulnerabilities. The project has a
-  `/security-review` for this; use it rather than reinventing it.
+  `/security-review` for this; use it rather than reinventing it. Includes task 0008's media gate:
+  try to get an image, video, or renderable document stored or served with `ALLOW_MEDIA` off, and
+  confirm the documented limits are the only ways through.
 - **UX and accessibility** — keyboard navigation, focus management, contrast against the dark palette,
   screen-reader semantics, error and loading states. The markup had real problems before task 0004;
   confirm they're gone and look for the ones nobody has looked for yet.
@@ -32,7 +34,7 @@ Four lenses, all of them:
 
 ### Deliverable
 
-A single ranked findings document at `reviews/0008-general-review-findings.md`, each finding carrying:
+A single ranked findings document at `reviews/0009-general-review-findings.md`, each finding carrying:
 what it is, where (`file:line`), why it matters, severity, and a suggested direction. Findings must be
 verified against the code before being written down — a plausible-sounding finding that doesn't
 reproduce wastes more time than it saves.
@@ -62,7 +64,7 @@ honest: no access control and a public global hole list are deliberate decisions
 
 ## Acceptance criteria
 
-- [ ] `reviews/0008-general-review-findings.md` exists, covering all four lenses, ranked by severity.
+- [ ] `reviews/0009-general-review-findings.md` exists, covering all four lenses, ranked by severity.
 - [ ] Every finding cites a concrete location and a reason it matters, and was verified against the
       code rather than asserted.
 - [ ] Deliberate decisions are listed as accepted rather than reported as defects.
