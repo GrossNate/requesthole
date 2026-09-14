@@ -831,7 +831,7 @@ describe("with media off", () => {
   });
 });
 
-describe("with media off, review fixes", () => {
+describe("with media off, rendering text and building no blobs", () => {
   const off = { allowMedia: false };
   const stubBlobs = () => {
     const createObjectURL = vi.fn(() => "blob:fake");
@@ -920,7 +920,7 @@ describe("with media off, review fixes", () => {
   });
 });
 
-describe("with media off, round-two fixes", () => {
+describe("with media off, multipart parts and a pending config", () => {
   const off = { allowMedia: false };
   const form = (partHead: string, content: string) =>
     toBytes(`--B\r\n${partHead}\r\n\r\n${content}\r\n--B--\r\n`);

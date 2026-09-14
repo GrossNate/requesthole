@@ -243,7 +243,7 @@ describe("media gate", () => {
       });
       expect(
         JSON.parse((await fetchRequest(app, address)).body_dropped!),
-      ).toMatchObject({ reason: "malformed", bytes: PNG.length });
+      ).toMatchObject({ reason: "form", bytes: PNG.length });
     });
 
     it("carries body_dropped in the list and the SSE frame", async () => {
@@ -450,6 +450,24 @@ describe("media gate", () => {
         );
       },
     );
+
+    // The gate already ran at capture; re-running it on every unmetered read
+    // would let one stored, costly form tie up the server. The stored body is
+    // swapped behind the app's back here only to show the re-check is skipped.
+    it("serves a body it checked at capture without re-checking it", async () => {
+      const app = await start();
+      const hole = await createHole(app);
+      const address = await send(app, hole, "checked text", {
+        "content-type": "text/plain",
+      });
+      app.db
+        .prepare("UPDATE requests SET body = ? WHERE request_address = ?")
+        .run(Buffer.from("<svg/>"), address);
+
+      const served = await fetchBody(app, address);
+      expect(served.headers["x-requesthole-body-withheld"]).toBeUndefined();
+      expect(served.body).toBe("<svg/>");
+    });
 
     it("lets a cross-origin page read the withheld header", async () => {
       const app = await start();

@@ -433,8 +433,9 @@ describe("filterBody", () => {
       }
     });
 
-    // Signatures are anchored: scanning the body would contradict the
-    // accepted base64 limit and break real JSON.
+    // Signatures are anchored (PDF and PostScript to a line start): scanning
+    // the body would contradict the accepted base64 limit and break
+    // legitimate JSON.
     it.each([
       ["JSON carrying a data: URI", '{"avatar":"data:image/png;base64,iVBOR"}'],
       [
@@ -443,6 +444,9 @@ describe("filterBody", () => {
       ],
       ["XML whose root is not svg", '<?xml version="1.0"?><feed><svg/></feed>'],
       ["prose starting with P1", "P1 is the priority"],
+      ["prose starting with a P-number", "P500 errors overnight"],
+      ["prose starting with P7", "P7 is the plan"],
+      ["prose starting with PF", "PF is short for power factor"],
       [
         "a vCard without a photo",
         "BEGIN:VCARD\nVERSION:4.0\nFN:Ada\nEND:VCARD\n",
@@ -609,11 +613,11 @@ describe("filterBody", () => {
         "a boundary longer than RFC 2046's 70 characters",
         `multipart/form-data; boundary=${"q".repeat(71)}`,
       ],
-    ])("drops a form with %s as malformed", (_, contentType) => {
+    ])("drops a form with %s as unparseable", (_, contentType) => {
       for (const body of [imageForm, text("just some text")]) {
         expect(filterBody(body, { "content-type": contentType })).toEqual({
           body: null,
-          dropped: { reason: "malformed", bytes: body.length, contentType },
+          dropped: { reason: "form", bytes: body.length, contentType },
         });
       }
     });
@@ -636,7 +640,7 @@ describe("filterBody", () => {
         text(crlf(field("ok", "fine"), "--XyZ--", "")),
       ]);
       expect(filterBody(body, form).dropped).toMatchObject({
-        reason: "malformed",
+        reason: "form",
       });
     });
 
@@ -649,7 +653,7 @@ describe("filterBody", () => {
         ),
       ]);
       expect(filterBody(body, form).dropped).toMatchObject({
-        reason: "malformed",
+        reason: "form",
       });
     });
 
@@ -671,7 +675,7 @@ describe("filterBody", () => {
     ])("drops a form whose part header block has %s", (_, block) => {
       const body = text(`--XyZ\r\n${block}\r\n\r\nv\r\n--XyZ--\r\n`);
       expect(filterBody(body, form).dropped).toMatchObject({
-        reason: "malformed",
+        reason: "form",
       });
     });
 
@@ -693,17 +697,60 @@ describe("filterBody", () => {
       },
     );
 
-    it("stays fast on a long boundary with near-miss filler", () => {
-      const boundary = "q".repeat(8000);
-      const filler = `--${"q".repeat(7999)}z`.repeat(125);
+    // The longest boundary the filter accepts, over a megabyte of filler that
+    // almost matches it at every step: the delimiter search's worst case.
+    it("stays fast on the longest accepted boundary with near-miss filler", () => {
+      const boundary = "q".repeat(70);
+      const filler = `--${"q".repeat(69)}z`.repeat(14_000);
       const body = text(
         `--${boundary}\r\n\r\n${filler}\r\n--${boundary}--\r\n`,
       );
       const started = performance.now();
-      filterBody(body, {
+      const result = filterBody(body, {
         "content-type": `multipart/form-data; boundary=${boundary}`,
       });
-      expect(performance.now() - started).toBeLessThan(100);
+      expect(performance.now() - started).toBeLessThan(500);
+      expect(result).toEqual({ body, dropped: null });
+    });
+
+    // RFC 2046 allows spaces or tabs after a delimiter, before its CRLF.
+    it("keeps a form whose delimiter lines carry transport padding", () => {
+      const body = text(
+        '--XyZ  \r\nContent-Disposition: form-data; name="x"\r\n\r\nhi\r\n--XyZ--\t\r\n',
+      );
+      const result = filterBody(body, form);
+      expect(result.dropped).toBeNull();
+      expect(result.body!.toString("utf8")).toBe(
+        '--XyZ\r\nContent-Disposition: form-data; name="x"\r\n\r\nhi\r\n--XyZ--\r\n',
+      );
+    });
+
+    // RFC 2046 bchars: digits, letters and '()+_,-./:=? and space (not last).
+    // Anything else is not a boundary, and would reach storage verbatim in
+    // every delimiter line.
+    it.each([
+      ["a percent sign", "%PDF-1.4"],
+      ["an exclamation mark", "%!PS"],
+      ["a trailing space", "abc "],
+      ["an asterisk", "a*b"],
+    ])("drops a form whose boundary has %s", (_, boundary) => {
+      expect(
+        (
+          filterBody(text(`--${boundary}\r\n\r\nv\r\n--${boundary}--\r\n`), {
+            "content-type": `multipart/form-data; boundary="${boundary}"`,
+          }).dropped as BodyDrop | null
+        )?.reason,
+      ).toBe("form");
+    });
+
+    it("accepts a boundary using every RFC 2046 character", () => {
+      const boundary = "aZ09'()+_,-./:=? x";
+      const body = text(`--${boundary}\r\n\r\nv\r\n--${boundary}--\r\n`);
+      expect(
+        filterBody(body, {
+          "content-type": `multipart/form-data; boundary="${boundary}"`,
+        }),
+      ).toEqual({ body, dropped: null });
     });
   });
 
@@ -824,6 +871,70 @@ describe("filterBody", () => {
         ),
       ).toBe("vcard");
     });
+
+    it("drops a vCard whose image property is folded across lines", () => {
+      expect(
+        signatureOf(
+          "BEGIN:VCARD\r\nVERSION:4.0\r\nPHOTO\r\n :data:image/png;base64,AAAA\r\nEND:VCARD\r\n",
+        ),
+      ).toBe("vcard");
+    });
+
+    it.each([
+      [
+        "a space after P7",
+        "P7 \nWIDTH 96\nHEIGHT 1\nDEPTH 1\nMAXVAL 126\nENDHDR\n~",
+      ],
+      ["the width right after the magic", "P596 120\n126\n~~"],
+      ["a PFM float map", "Pf\n96 120\n-1.0\nAAA?"],
+      ["a colour PFM", "PF\n2 1\n1.0\nAAA?"],
+    ])("drops a Netpbm image with %s", (_, value) => {
+      expect(signatureOf(value)).toBe("netpbm");
+    });
+
+    it("drops a FITS image", () => {
+      const cards = [
+        "SIMPLE  =                    T",
+        "BITPIX  =                    8",
+        "NAXIS   =                    2",
+        "NAXIS1  =                    2",
+        "NAXIS2  =                    1",
+        "END",
+      ]
+        .map((card) => card.padEnd(80))
+        .join("")
+        .padEnd(2880);
+      expect(signatureOf(`${cards}~~`)).toBe("fits");
+    });
+
+    it("drops a bare %! PostScript header at a line start", () => {
+      expect(signatureOf("%!\n100 100 translate showpage\n")).toBe(
+        "postscript",
+      );
+      expect(signatureOf("junk\n%!\nshowpage\n")).toBe("postscript");
+    });
+
+    it("drops an SVG whose root has a non-ASCII namespace prefix", () => {
+      expect(
+        signatureOf(
+          '<é:svg xmlns:é="http://www.w3.org/2000/svg"><rect/></é:svg>',
+        ),
+      ).toBe("svg");
+    });
+
+    it("drops a raw email whose MIME-Version is not its first header", () => {
+      expect(
+        signatureOf(
+          "Received: from x\r\nFrom: a@b\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=x\r\n\r\n--x\r\n",
+        ),
+      ).toBe("mime");
+    });
+
+    it("keeps text that mentions MIME-Version after its first paragraph", () => {
+      expect(
+        signatureOf("Notes\n\nMIME-Version: 1.0 is the header we saw\n"),
+      ).toBeUndefined();
+    });
   });
 
   describe("charset labels that decode as UTF-16", () => {
@@ -869,12 +980,12 @@ describe("filterBody", () => {
       ["text", text("second field text")],
       ["binary", PNG],
       ["an SVG part", text('<svg xmlns="http://www.w3.org/2000/svg"/>')],
-    ])("drops it as malformed when the tail is %s", (_, tail) => {
+    ])("drops it as unparseable when the tail is %s", (_, tail) => {
       const body = open(tail);
       expect(filterBody(body, form)).toEqual({
         body: null,
         dropped: {
-          reason: "malformed",
+          reason: "form",
           bytes: body.length,
           contentType: "multipart/form-data; boundary=b",
         },

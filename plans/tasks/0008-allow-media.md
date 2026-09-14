@@ -237,6 +237,17 @@ dropped with a description; `ALLOW_MEDIA` on a private instance is the escape ha
   blocks and every header line, and reports whether the body was closed. Its trim and parameter
   scans are linear (a trimming regex and a re-searched `=` were quadratic on 1 MB of sender text).
 
+- **Unparseable forms get their own reason, `form`** (review round 3), so the notice says "form
+  did not parse" instead of blaming a content-type that parsed. Boundaries must use RFC 2046's
+  bchars as well as its 70-character limit, and delimiter lines may carry transport padding.
+- **Read side trusts rows the gate checked** (review round 3): capture sets
+  `requests.body_checked = 1` with media off, and the body endpoint re-runs the filter only for
+  other rows (media on, or older), since one stored crafted form cost up to 213 ms per unmetered
+  read. The charset verdict is memoised for the same reason.
+- **Signatures, round 3**: bare `%!` for PostScript at a line start, Netpbm width-after-magic and
+  space-after-P7 forms, PFM/half-float maps, FITS, folded vCard properties, a raw email whose
+  MIME-Version is anywhere in its opening header block, and non-ASCII SVG root prefixes.
+
 ## What was built
 
 - Backend: `src/config.ts` (`allowMedia`), `src/media-type.ts` (strict RFC 9110 parser, ported
@@ -258,5 +269,6 @@ dropped with a description; `ALLOW_MEDIA` on a private instance is the escape ha
   media off (PNG, SVG-as-text, gzip JSON, mixed multipart, JSON webhook) and on, plus withheld rows
   after switching off. Review round 1 (18 findings incl. a ReDoS blocker) all fixed; round 2
   (12 findings incl. an O(n·m) long-boundary search and an unclosed-multipart bypass) all fixed
-  with the two user decisions above.
+  with the two user decisions above. Round 3 (17 minor/nit findings, no blockers or majors) all
+  fixed.
 

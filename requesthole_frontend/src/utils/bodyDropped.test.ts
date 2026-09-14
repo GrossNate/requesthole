@@ -104,6 +104,31 @@ describe("describeDrop", () => {
     expect(dropped.kind === "whole" && describeDrop(dropped)).toBe(expected);
   });
 
+  it("says a form did not parse rather than blaming its content-type", () => {
+    const dropped = whole({
+      reason: "form",
+      bytes: 62,
+      contentType: "multipart/form-data; boundary=b",
+    });
+    expect(dropped.kind === "whole" && describeDrop(dropped)).toBe(
+      "Media/binary data dropped: form did not parse, 62 bytes, multipart/form-data; boundary=b",
+    );
+  });
+
+  it("names every embedded vCard medium, not only a photo", () => {
+    const dropped = whole({ reason: "signature", signature: "vcard" });
+    expect(dropped.kind === "whole" && describeDrop(dropped)).toContain(
+      "looks like a vCard with embedded media",
+    );
+  });
+
+  it("names a FITS image", () => {
+    const dropped = whole({ reason: "signature", signature: "fits" });
+    expect(dropped.kind === "whole" && describeDrop(dropped)).toContain(
+      "looks like a FITS image",
+    );
+  });
+
   it("names a signature it does not know by its raw name", () => {
     const dropped = whole({ reason: "signature", signature: "newfmt" });
     expect(dropped.kind === "whole" && describeDrop(dropped)).toContain(

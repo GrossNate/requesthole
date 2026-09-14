@@ -77,11 +77,14 @@ Durable decisions that apply across all tasks.
   (`true`/`false`/`1`/`0`, unset = false, anything else fails fast) is the conscious opt-in to storing
   and serving media and binary bodies. With it off, a body filter — strict content-type parse,
   encodings, declared-type allowlist behind a top-level gate, strict-UTF-8 byte check, anchored
-  file-signature check (PDF/PostScript at any line start in the first 1 KB, SVG past any prolog),
-  multipart part by part with any unparseable form — no or over-70-char boundary, skipped region,
-  malformed part header, no close delimiter — dropped whole as malformed — drops disallowed content before
+  file-signature check (PDF `%PDF-`/PostScript `%!` at any line start in the first 1 KB, SVG past any
+  prolog, MIME-Version anywhere in a raw email's header block),
+  multipart part by part with any unparseable form — no boundary or one outside RFC 2046's 70 bchars,
+  skipped region, malformed part header, no close delimiter — dropped whole with reason `form` — drops
+  disallowed content before
   storage and records a JSON description in the nullable `requests.body_dropped` column, carried in
-  all request metadata. The body endpoint re-runs the filter at read time (empty 200 +
+  all request metadata. Rows captured with media off are marked `body_checked = 1` and served as stored;
+  the body endpoint re-runs the filter at read time for any other row (empty 200 +
   `x-requesthole-body-withheld`) and serves kept bodies as `text/plain; charset=utf-8` with CORP
   `same-origin`. `GET /api/config` returns `{ allowMedia }`; the viewer treats a failed fetch as media
   off (a 5 s timeout counts as failure), renders no body until it answers, and never builds an
@@ -90,7 +93,8 @@ Durable decisions that apply across all tasks.
 - **Schema**: two tables — `holes` (`hole_address`, `created`, `creator_ip` — task 0007, never
   returned by any route, added by an idempotent `ALTER TABLE` on older databases) and `requests` (`request_address`,
   `hole_id` FK `ON DELETE CASCADE`, `created`, `method`, `request_path`, `query_params`, `headers`,
-  `body`, `body_dropped` — task 0008). `query_params`/`headers`/`body_dropped` stored as JSON text;
+  `body`, `body_dropped`, `body_checked` — task 0008). `query_params`/`headers`/`body_dropped` stored
+  as JSON text;
   `body` as binary.
 - **Storage** (SQLite since task 0002): `better-sqlite3`, raw SQL, no ORM — one long-lived
   connection opened by a `fastify.db` plugin. Single-file DB at `DATABASE_PATH` (container

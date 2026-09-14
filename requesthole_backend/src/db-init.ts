@@ -24,7 +24,10 @@ export default function initSchema(db: Database.Database) {
       body BLOB,
       -- JSON describing content the media gate dropped (ALLOW_MEDIA off);
       -- NULL when nothing was.
-      body_dropped TEXT
+      body_dropped TEXT,
+      -- 1 when the body was stored after passing the media gate, so reads
+      -- need not run it again; NULL for rows captured with media on.
+      body_checked INTEGER
     );
 
     -- SQLite does not index foreign keys on its own. The insert-time trim and
@@ -53,5 +56,8 @@ export default function initSchema(db: Database.Database) {
   }[];
   if (!requestColumns.some((column) => column.name === "body_dropped")) {
     db.exec("ALTER TABLE requests ADD COLUMN body_dropped TEXT");
+  }
+  if (!requestColumns.some((column) => column.name === "body_checked")) {
+    db.exec("ALTER TABLE requests ADD COLUMN body_checked INTEGER");
   }
 }

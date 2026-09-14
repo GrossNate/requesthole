@@ -174,11 +174,9 @@ describe("instance config", () => {
     await expect(holeService.getConfig()).resolves.toEqual({
       allowMedia: true,
     });
-    // A hung config endpoint must not hold the viewer back forever: the
-    // request carries its own deadline, and running out of time is a failure.
     expect(axios.get).toHaveBeenCalledWith(
       `${holeService.BASE_URL}/api/config`,
-      expect.objectContaining({ timeout: expect.any(Number) }),
+      expect.anything(),
     );
   });
 
@@ -208,6 +206,32 @@ describe("instance config", () => {
     ],
   ] as const)("treats %s as media off", async ([, arrange]) => {
     arrange();
+    await expect(holeService.getConfig()).resolves.toEqual({
+      allowMedia: false,
+    });
+  });
+});
+
+// A hung config endpoint must not hold the viewer back forever: the request
+// carries its own deadline, and running out of time reads as media off.
+describe("instance config deadline", () => {
+  it("gives the config request a five-second deadline", async () => {
+    vi.mocked(axios.get).mockResolvedValue({
+      status: 200,
+      data: { allowMedia: true },
+    });
+    await holeService.getConfig();
+    expect(vi.mocked(axios.get).mock.calls[0]![1]).toMatchObject({
+      timeout: 5_000,
+    });
+  });
+
+  it("treats a request that ran out of time as media off", async () => {
+    vi.mocked(axios.get).mockRejectedValue(
+      Object.assign(new Error("timeout of 5000ms exceeded"), {
+        code: "ECONNABORTED",
+      }),
+    );
     await expect(holeService.getConfig()).resolves.toEqual({
       allowMedia: false,
     });

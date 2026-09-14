@@ -237,14 +237,15 @@ failure drops it:
   (RTF, vCard, iCalendar, uuencode) are dropped. HTML stays allowed.
 - **Bytes.** The body must be valid UTF-8 with no control characters other than
   tab, line feed, carriage return and form feed.
-- **File signature.** A body that starts like an RTF, SVG, XPM, XBM, Netpbm
-  (P1 to P7), vCard with a photo, logo or sound, uuencoded file or MIME message
-  is dropped, whatever type it claims. A PDF or PostScript header counts at the
-  start of any line in the first 1024 bytes, since readers look that far; text
-  that mentions one mid-line is kept. The SVG check skips
-  the whole XML prolog (declaration, comments, doctype) however long it is,
-  and accepts a namespace-prefixed root. A fixed limit would let padding hide
-  the `<svg` behind it.
+- **File signature.** A body that starts like an RTF, SVG, XPM, XBM, Netpbm or
+  PFM (P1 to P7, PF), FITS, vCard with a photo, logo or sound, or uuencoded
+  file is dropped, whatever type it claims. A PDF header (`%PDF-`) or PostScript
+  header (`%!`) counts at the start of any line in the first 1024 bytes, since
+  readers look that far; text that mentions one mid-line is kept. A raw email
+  counts when `MIME-Version:` appears anywhere in its opening header block.
+  The SVG check skips the whole XML prolog (declaration, comments, doctype)
+  however long it is, and accepts a namespace-prefixed root. A fixed limit
+  would let padding hide the `<svg` behind it.
 - **Multipart forms, part by part.** Each part gets the checks above. A
   dropped part keeps its headers and loses its content, so the form still
   shows every field. A part with `Content-Transfer-Encoding`, or one that is
@@ -253,11 +254,12 @@ failure drops it:
   every line in them must be a `name: value` header that passes the byte check,
   and a PDF or PostScript header anywhere in one drops the form.
 - **Forms that do not parse are dropped.** A `multipart/form-data` body with no
-  boundary, a boundary longer than RFC 2046's 70 characters, a region that is
-  not a part, a malformed part header, or no closing boundary is dropped whole
-  as malformed. The whole-body checks cannot see an image or an encoded part
-  hidden inside such a body, so there is nothing safe to keep. A client that
-  forgets the closing boundary loses its form, and the drop notice says why.
+  boundary, a boundary that breaks RFC 2046 (over 70 characters, or characters
+  outside its set), a region that is not a part, a malformed part header, or
+  no closing boundary is dropped whole. The whole-body checks cannot see an
+  image or an encoded part hidden inside such a body, so there is nothing safe
+  to keep. A client that forgets the closing boundary loses its form, and the
+  drop notice says the form did not parse.
 
 A dropped body is stored empty, with a description of what arrived: its size,
 declared type and why it was dropped. The viewer shows that description in
@@ -270,10 +272,11 @@ request, the declared type, the size and the reason, and never any content.
 With media off, the body endpoint serves every body as
 `text/plain; charset=utf-8` with
 `Cross-Origin-Resource-Policy: same-origin`, so no other site can embed it as
-an image. It also runs the checks again when it serves a body. If you turn
-media off after capturing with it on, the older binary bodies are answered
-with an empty `200` and `x-requesthole-body-withheld: true` until the
-retention sweep removes them.
+an image. A body captured with media off is marked as checked and served as
+stored. Anything else is checked again as it is served, so if you turn media
+off after capturing with it on, the older binary bodies are answered with an
+empty `200` and `x-requesthole-body-withheld: true` until the retention sweep
+removes them.
 
 ### Limits of ALLOW_MEDIA
 

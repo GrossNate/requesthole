@@ -6,15 +6,21 @@ import { parseMultipart, type MultipartPart } from "./multipart";
  * The media gate (task 0008). With `ALLOW_MEDIA` off, RequestHole is
  * text-only: this decides, for a captured body and its request headers, what
  * is stored and what description of dropped content is recorded. It runs at
- * capture and again at read time, so it is pure and never throws.
+ * capture, and at read time for rows it has not already checked, so it is
+ * pure and never throws.
  */
 
+/**
+ * Why content was dropped. `malformed` is a content-type that does not parse;
+ * `form` is a multipart form whose body does not parse into parts.
+ */
 export type DropReason =
   | "type"
   | "encoding"
   | "bytes"
   | "signature"
-  | "malformed";
+  | "malformed"
+  | "form";
 
 /** A whole body that was dropped. */
 export interface BodyDrop {
@@ -72,14 +78,25 @@ const BANNED_CHARSET = /^(?:utf-?7|utf-?16.*|utf-?32.*)$/;
  * know falls back to UTF-8 there, so it is harmless here.
  */
 function isBannedCharset(label: string): boolean {
-  if (BANNED_CHARSET.test(label.toLowerCase())) return true;
+  const key = label.toLowerCase();
+  if (BANNED_CHARSET.test(key)) return true;
+  // Memoised: a form of thousands of parts with an unknown label would
+  // otherwise build, and throw from, a TextDecoder for every part.
+  const known = charsetVerdicts.get(key);
+  if (known !== undefined) return known;
+  let banned = false;
   try {
     const { encoding } = new TextDecoder(label);
-    return encoding === "utf-16le" || encoding === "utf-16be";
+    banned = encoding === "utf-16le" || encoding === "utf-16be";
   } catch {
-    return false;
+    banned = false;
   }
+  if (charsetVerdicts.size >= 256) charsetVerdicts.clear();
+  charsetVerdicts.set(key, banned);
+  return banned;
 }
+
+const charsetVerdicts = new Map<string, boolean>();
 
 /**
  * Step 1: the strict parse. A missing content-type is legitimate (Pub/Sub
@@ -263,10 +280,9 @@ function doctypeEnd(text: string, from: number): number {
   return -1;
 }
 
-/** The first element is `svg`, namespace prefix or not. */
-const SVG_ROOT = /^<(?:[A-Za-z_][\w.-]*:)?svg(?![\w.:-])/i;
+/** The first element is `svg`, with or without a (possibly non-ASCII) prefix. */
+const SVG_ROOT = /^<(?:[^\s:>/]+:)?svg(?![\p{L}\p{N}_.:-])/iu;
 
-/**
 /** Whether any line of `text` starts (after blanks) with `marker`. */
 function lineStartsWith(text: string, marker: string): boolean {
   let at = text.indexOf(marker);
@@ -289,36 +305,55 @@ function lineStartsWith(text: string, marker: string): boolean {
 /**
  * Image and document formats that are pure ASCII and would pass steps 1–4
  * under text/plain. Anchored at the start (after an optional BOM and leading
- * whitespace), except PDF and PostScript, which readers find anywhere in the
- * first 1024 bytes. Scanning the whole body for `data:image/` would contradict
- * the accepted base64 limit and break legitimate JSON.
+ * whitespace), except PDF and PostScript, which count at the start of any
+ * line in the first 1024 bytes, and a raw email's MIME-Version, which counts
+ * anywhere in its leading header block. Scanning the whole body for
+ * `data:image/` would contradict the accepted base64 limit and break
+ * legitimate JSON.
  */
 const SIGNATURES: [string, (start: string, whole: string) => boolean][] = [
   // Readers look for these headers through the first 1024 bytes, so a
   // leading line must not hide them; only a line start counts, so text that
   // mentions one mid-line is kept.
   ["pdf", (_, whole) => lineStartsWith(whole.slice(0, 1024), "%PDF-")],
-  ["postscript", (_, whole) => lineStartsWith(whole.slice(0, 1024), "%!PS")],
+  // A bare `%!` is PostScript to libmagic, shared-mime-info and printers.
+  ["postscript", (_, whole) => lineStartsWith(whole.slice(0, 1024), "%!")],
   ["rtf", (start) => start.startsWith("{\\rtf")],
   ["svg", (start) => SVG_ROOT.test(afterXmlProlog(start))],
   ["xpm", (start) => start.startsWith("/* XPM */")],
   ["xbm", (start) => /^#define[ \t]+\S*_width[ \t]/.test(start)],
-  // P1–P6 then whitespace or comments (ended by CR or LF) before the width;
-  // P7 (PAM) then its header lines.
+  // P1–P6 then whitespace or comments (ended by CR or LF) before the width,
+  // or the width straight after the magic when a height follows; P7 (PAM)
+  // then a header keyword; PFM (PF, Pf) and half-float maps (PH, Ph) then
+  // their dimensions. Prose like "P500 errors" or "P7 is" is kept.
   [
     "netpbm",
     (start) =>
       /^P[1-6](?:[ \t\r\n\f\v]|#[^\r\n]*[\r\n])+\d/.test(start) ||
-      /^P7[\r\n]/.test(start),
+      /^P[1-6]\d+[ \t\r\n\f\v]+\d/.test(start) ||
+      /^P7\s+(?:#[^\r\n]*[\r\n]\s*)*(?:WIDTH|HEIGHT|DEPTH|MAXVAL|TUPLTYPE|ENDHDR)\b/.test(
+        start,
+      ) ||
+      /^P[FfHh]\s+\d+\s+\d+/.test(start),
   ],
+  // FITS: 80-column ASCII cards, the first always SIMPLE = T.
+  ["fits", (start) => /^SIMPLE {2}=\s+T/.test(start)],
   [
     "vcard",
     (start, whole) =>
       /^BEGIN:VCARD/i.test(start) &&
-      /^(?:[A-Za-z0-9-]+\.)?(?:PHOTO|LOGO|SOUND)[;:]/im.test(whole),
+      // Unfolded first: a property may be folded right after its name.
+      /^(?:[A-Za-z0-9-]+\.)?(?:PHOTO|LOGO|SOUND)[;:]/im.test(
+        whole.replace(/\r?\n[ \t]/g, ""),
+      ),
   ],
   ["uuencode", (start) => /^begin [0-7]{3}\s/.test(start)],
-  ["mime", (start) => /^MIME-Version:/i.test(start)],
+  // A raw email usually opens with Received:, From: or Date:, so any line of
+  // the leading header block (up to the first blank line) counts.
+  [
+    "mime",
+    (start) => /^MIME-Version:/im.test(start.split(/\r?\n\r?\n/, 1)[0]!),
+  ],
 ];
 
 /** Step 5: the name of the format the body starts like, if any. */
@@ -390,19 +425,21 @@ function filterMultipart(
 ): FilterResult | Failure {
   // RFC 2046 caps a boundary at 70 characters. A longer one makes every
   // delimiter search cost its length, over up to MAX_BODY_BYTES of body.
-  if (boundary === undefined || boundary.length > MAX_BOUNDARY_LENGTH) {
-    return { reason: "malformed" };
+  // RFC 2046 bchars only: a boundary is written verbatim into every
+  // delimiter line, so `%PDF-` or `%!` there would reach storage.
+  if (boundary === undefined || !BOUNDARY.test(boundary)) {
+    return { reason: "form" };
   }
   const parsed = parseMultipart(body, boundary);
   // An unclosed body would lose its tail in the rebuild, and a skipped region
   // is content no part check saw.
   if (parsed === undefined || parsed.skipped > 0 || !parsed.closed) {
-    return { reason: "malformed" };
+    return { reason: "form" };
   }
   // Header blocks are stored verbatim, so they must be text, and headers.
   for (const { headerBytes } of parsed.parts) {
     if (!checkBytes(headerBytes) || !isHeaderBlock(headerBytes)) {
-      return { reason: "malformed" };
+      return { reason: "form" };
     }
     // A reader finds a PDF or PostScript header anywhere in the first 1 KB,
     // and nothing legitimate puts one in a part header.
@@ -447,7 +484,11 @@ function filterMultipart(
   };
 }
 
-const MAX_BOUNDARY_LENGTH = 70;
+/**
+ * RFC 2046: 1–70 of digits, letters and '()+_,-./:=?, or space, never last.
+ * The length cap also bounds every delimiter search's cost.
+ */
+const BOUNDARY = /^[0-9A-Za-z'()+_,\-./:=? ]{0,69}[0-9A-Za-z'()+_,\-./:=?]$/;
 
 const FIELD_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 

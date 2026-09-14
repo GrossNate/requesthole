@@ -93,8 +93,8 @@ function routesWrapper(
       `
         INSERT INTO requests
           (hole_id, request_address, method, request_path, query_params,
-            headers, body, body_dropped)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            headers, body, body_dropped, body_checked)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     // Trims the hole back to its cap right after every capture, in the same
     // transaction as the insert, so the table is bounded continuously rather
@@ -173,6 +173,7 @@ function routesWrapper(
               JSON.stringify(request.headers),
               body,
               dropped === null ? null : JSON.stringify(dropped),
+              config.allowMedia ? null : 1,
             );
             return address;
           },

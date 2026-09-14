@@ -106,7 +106,8 @@ const SIGNATURE_LABELS: Record<string, string> = {
   xpm: "an XPM image",
   xbm: "an XBM image",
   netpbm: "a Netpbm image",
-  vcard: "a vCard with a photo",
+  vcard: "a vCard with embedded media",
+  fits: "a FITS image",
   uuencode: "uuencoded data",
   mime: "a MIME message",
 };
@@ -133,6 +134,9 @@ function describeDetail(detail: DropDetail, encodedWhat: string): string {
       break;
     case "malformed":
       pieces.push("unreadable content-type");
+      break;
+    case "form":
+      pieces.push("form did not parse");
       break;
   }
   pieces.push(formatByteCount(detail.bytes));

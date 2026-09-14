@@ -88,7 +88,10 @@ export function parseMultipart(
   for (let i = 0; i < positions.length - 1; i++) {
     // The region between this delimiter line's CRLF and the CRLF that
     // belongs to the next delimiter.
+    // RFC 2046 transport padding: spaces or tabs may follow a delimiter
+    // before its CRLF.
     let start = positions[i]! + delimiter.length;
+    while (bytes[start] === 32 || bytes[start] === 9) start += 1;
     if (bytes[start] === CR && bytes[start + 1] === LF) start += 2;
     let end = positions[i + 1]!;
     if (bytes[end - 2] === CR && bytes[end - 1] === LF) end -= 2;

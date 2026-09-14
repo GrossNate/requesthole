@@ -47,7 +47,8 @@ function routesWrapper(
     `,
     );
     const selectRequestBody = fastify.db.prepare(
-      `SELECT headers, body FROM requests WHERE request_address = ?`,
+      `SELECT headers, body, body_checked FROM requests
+       WHERE request_address = ?`,
     );
 
     fastify.delete<{ Params: RequestParams }>(
@@ -89,9 +90,10 @@ function routesWrapper(
         if (row === undefined) {
           reply.code(404);
         } else {
-          const { body, headers } = row as {
+          const { body, headers, body_checked } = row as {
             body: Buffer | string | null;
             headers: string;
+            body_checked: number | null;
           };
           const buffer =
             body === null
@@ -108,13 +110,19 @@ function routesWrapper(
           reply.header("content-disposition", "attachment");
 
           if (!config.allowMedia) {
-            // The filter runs again at read time: rows captured while media
-            // was on stay until the retention sweep, and must not be served.
+            // Rows captured while media was on (or before the gate existed)
+            // stay until the retention sweep, and must not be served, so the
+            // filter runs again for them. A row the gate already checked at
+            // capture is served as stored: re-running it on every unmetered
+            // read would let one costly stored form tie up the server.
             // Every body goes out as plain text, whatever the sender claimed,
             // and CORP stops other origins embedding it as an image.
             reply.header("content-type", "text/plain; charset=utf-8");
             reply.header("cross-origin-resource-policy", "same-origin");
-            const filtered = filterBody(buffer, headersObject);
+            const filtered =
+              body_checked === 1
+                ? { body: buffer, dropped: null }
+                : filterBody(buffer, headersObject);
             if (
               filtered.dropped !== null ||
               !buffer.equals(filtered.body ?? Buffer.alloc(0))
