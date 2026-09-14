@@ -21,7 +21,10 @@ export default function initSchema(db: Database.Database) {
       request_path TEXT NOT NULL,
       query_params TEXT,
       headers TEXT,
-      body BLOB
+      body BLOB,
+      -- JSON describing content the media gate dropped (ALLOW_MEDIA off);
+      -- NULL when nothing was.
+      body_dropped TEXT
     );
 
     -- SQLite does not index foreign keys on its own. The insert-time trim and
@@ -42,4 +45,13 @@ export default function initSchema(db: Database.Database) {
   db.exec(
     "CREATE INDEX IF NOT EXISTS idx_holes_creator_ip ON holes (creator_ip)",
   );
+
+  // Likewise for a database from before the media gate: its old requests
+  // stay NULL, which reads as nothing dropped.
+  const requestColumns = db.prepare("PRAGMA table_info(requests)").all() as {
+    name: string;
+  }[];
+  if (!requestColumns.some((column) => column.name === "body_dropped")) {
+    db.exec("ALTER TABLE requests ADD COLUMN body_dropped TEXT");
+  }
 }

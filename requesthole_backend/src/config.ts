@@ -25,11 +25,18 @@ export interface Config {
   maxHolesPerIp: number;
   /** Request bodies above this many bytes are rejected with 413. */
   maxBodyBytes: number;
+  /**
+   * The conscious opt-in to storing and serving media and binary bodies. Off,
+   * RequestHole is text-only: the body filter drops anything else at capture.
+   */
+  allowMedia: boolean;
 }
 
 export type ConfigOverrides = Partial<Config>;
 
-const KNOBS: { key: keyof Config; env: string; fallback: number }[] = [
+type NumericKnob = Exclude<keyof Config, "allowMedia">;
+
+const KNOBS: { key: NumericKnob; env: string; fallback: number }[] = [
   { key: "retentionDays", env: "RETENTION_DAYS", fallback: 7 },
   { key: "maxRequestsPerHole", env: "MAX_REQUESTS_PER_HOLE", fallback: 100 },
   { key: "holeCreateRateLimit", env: "HOLE_CREATE_RATE_LIMIT", fallback: 10 },
@@ -56,11 +63,40 @@ function parsePositiveInteger(name: string, raw: string): number {
   return Number(raw);
 }
 
+function parseBoolean(name: string, raw: string): boolean {
+  // Deliberately narrow: "yes", "on" or an empty string throw rather than
+  // guess, since a typo must never deploy something the operator didn't mean.
+  switch (raw.toLowerCase()) {
+    case "true":
+    case "1":
+      return true;
+    case "false":
+    case "0":
+      return false;
+    default:
+      throw new Error(
+        `${name} must be true, false, 1 or 0, got ${JSON.stringify(raw)}`,
+      );
+  }
+}
+
 export default function loadConfig(
   overrides: ConfigOverrides = {},
   env: NodeJS.ProcessEnv = process.env,
 ): Config {
   const config = {} as Config;
+  if (overrides.allowMedia !== undefined) {
+    if (typeof overrides.allowMedia !== "boolean") {
+      throw new Error(
+        `allowMedia must be a boolean, got ${JSON.stringify(overrides.allowMedia)}`,
+      );
+    }
+    config.allowMedia = overrides.allowMedia;
+  } else {
+    const raw = env.ALLOW_MEDIA;
+    config.allowMedia =
+      raw === undefined ? false : parseBoolean("ALLOW_MEDIA", raw);
+  }
   for (const { key, env: name, fallback } of KNOBS) {
     const override = overrides[key];
     if (override !== undefined) {

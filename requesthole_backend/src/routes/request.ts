@@ -1,6 +1,8 @@
 import { FastifyInstance, RouteShorthandOptions } from "fastify";
 import { JSONSchemaType } from "ajv";
 import RequestBroadcaster from "../RequestBroadcaster";
+import { Config } from "../config";
+import { filterBody, FilterHeaders } from "../body-filter";
 
 interface RequestParams {
   request_address: string;
@@ -14,7 +16,10 @@ const params: JSONSchemaType<RequestParams> = {
   required: ["request_address"],
 };
 
-function routesWrapper(requestBroadcaster: RequestBroadcaster) {
+function routesWrapper(
+  requestBroadcaster: RequestBroadcaster,
+  config: Pick<Config, "allowMedia">,
+) {
   return function routes(
     fastify: FastifyInstance,
     options: RouteShorthandOptions,
@@ -35,7 +40,8 @@ function routesWrapper(requestBroadcaster: RequestBroadcaster) {
         method,
         request_path,
         query_params,
-        headers
+        headers,
+        body_dropped
       FROM requests
       WHERE request_address = ?
     `,
@@ -93,22 +99,43 @@ function routesWrapper(requestBroadcaster: RequestBroadcaster) {
               : body instanceof Buffer
                 ? body
                 : Buffer.from(body);
-          const headersObject = JSON.parse(headers) as Partial<{
-            "content-type": string;
-          }>;
-          // Serve captured bodies inertly. The stored content is untrusted, so a
-          // stored `<script>` must never execute on this origin: `nosniff` stops
-          // the browser inferring an executable type, and `attachment` makes
-          // direct navigation download rather than render. The viewer still shows
-          // images inline because `<img>` sub-resource loads ignore both headers;
-          // the PDF link, which opened a tab, now downloads instead — the safe
-          // trade for not rendering attacker-controlled documents same-origin.
-          reply.header(
-            "content-type",
-            headersObject["content-type"] ?? "application/octet-stream",
-          );
+          const headersObject = JSON.parse(headers) as FilterHeaders;
+          // Serve captured bodies inertly. The stored content is untrusted, so
+          // a stored `<script>` must never execute on this origin: `nosniff`
+          // stops the browser inferring an executable type, and `attachment`
+          // makes direct navigation download rather than render.
           reply.header("x-content-type-options", "nosniff");
           reply.header("content-disposition", "attachment");
+
+          if (!config.allowMedia) {
+            // The filter runs again at read time: rows captured while media
+            // was on stay until the retention sweep, and must not be served.
+            // Every body goes out as plain text, whatever the sender claimed,
+            // and CORP stops other origins embedding it as an image.
+            reply.header("content-type", "text/plain; charset=utf-8");
+            reply.header("cross-origin-resource-policy", "same-origin");
+            const filtered = filterBody(buffer, headersObject);
+            if (
+              filtered.dropped !== null ||
+              !buffer.equals(filtered.body ?? Buffer.alloc(0))
+            ) {
+              reply.header("x-requesthole-body-withheld", "true");
+              reply.send(Buffer.alloc(0));
+              return;
+            }
+            reply.send(buffer);
+            return;
+          }
+
+          // Media on, the sender's type is kept so the viewer can show images
+          // inline: `<img>` sub-resource loads ignore both headers above.
+          const contentType = headersObject["content-type"];
+          reply.header(
+            "content-type",
+            typeof contentType === "string"
+              ? contentType
+              : "application/octet-stream",
+          );
           reply.send(buffer);
         }
       },

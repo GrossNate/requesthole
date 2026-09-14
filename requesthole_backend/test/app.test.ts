@@ -365,7 +365,40 @@ describe("requests", () => {
     expect(missing.statusCode).toBe(404);
   });
 
-  it("round-trips a binary body with its content-type", async () => {
+  // Binary bodies are stored only with ALLOW_MEDIA on; the default is below.
+  const withMedia = async () => {
+    const mediaApp = buildApp({
+      databasePath: ":memory:",
+      config: { allowMedia: true },
+    });
+    await mediaApp.ready();
+    return mediaApp;
+  };
+
+  it("round-trips a binary body with its content-type when media is allowed", async () => {
+    const mediaApp = await withMedia();
+    try {
+      const binary = Buffer.from([0x00, 0x01, 0xff, 0xfe, 0x80, 0x7f]);
+      const requestAddress = await captureRequest(
+        mediaApp,
+        binary,
+        "application/octet-stream",
+      );
+
+      const response = await mediaApp.inject({
+        method: "GET",
+        url: `/api/request/${requestAddress}/body`,
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["content-type"]).toBe("application/octet-stream");
+      expect(response.rawPayload).toEqual(binary);
+    } finally {
+      await mediaApp.close();
+    }
+  });
+
+  it("drops a binary body by default and serves nothing for it", async () => {
     const binary = Buffer.from([0x00, 0x01, 0xff, 0xfe, 0x80, 0x7f]);
     const requestAddress = await captureRequest(
       app,
@@ -379,11 +412,47 @@ describe("requests", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.headers["content-type"]).toBe("application/octet-stream");
-    expect(response.rawPayload).toEqual(binary);
+    expect(response.rawPayload).toEqual(Buffer.alloc(0));
+    const stored = await app.inject({
+      method: "GET",
+      url: `/api/request/${requestAddress}`,
+    });
+    expect(
+      JSON.parse(stored.json<{ body_dropped: string }>().body_dropped),
+    ).toMatchObject({
+      reason: "type",
+      contentType: "application/octet-stream",
+    });
   });
 
-  it("serves captured bodies inertly so stored content cannot execute", async () => {
+  it("serves captured bodies inertly so stored content cannot execute, when media is allowed", async () => {
+    const mediaApp = await withMedia();
+    try {
+      const requestAddress = await captureRequest(
+        mediaApp,
+        "<script>alert(1)</script>",
+        "text/html",
+      );
+
+      const response = await mediaApp.inject({
+        method: "GET",
+        url: `/api/request/${requestAddress}/body`,
+      });
+
+      expect(response.statusCode).toBe(200);
+      // With media on the stored content-type is preserved (the viewer needs
+      // it for images), but direct navigation downloads rather than renders,
+      // and the browser may not sniff a different type — so a stored
+      // <script> never executes.
+      expect(response.headers["content-type"]).toBe("text/html");
+      expect(response.headers["x-content-type-options"]).toBe("nosniff");
+      expect(response.headers["content-disposition"]).toBe("attachment");
+    } finally {
+      await mediaApp.close();
+    }
+  });
+
+  it("serves captured bodies as plain text by default, whatever their type", async () => {
     const requestAddress = await captureRequest(
       app,
       "<script>alert(1)</script>",
@@ -396,12 +465,12 @@ describe("requests", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    // The stored content-type is preserved (the viewer needs it for images),
-    // but direct navigation downloads rather than renders, and the browser
-    // may not sniff a different type — so a stored <script> never executes.
-    expect(response.headers["content-type"]).toBe("text/html");
+    expect(response.headers["content-type"]).toBe("text/plain; charset=utf-8");
     expect(response.headers["x-content-type-options"]).toBe("nosniff");
     expect(response.headers["content-disposition"]).toBe("attachment");
+    expect(response.headers["cross-origin-resource-policy"]).toBe(
+      "same-origin",
+    );
   });
 
   it("returns an empty body (not a 500) for a bodyless capture", async () => {
@@ -421,7 +490,7 @@ describe("requests", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.rawPayload).toEqual(Buffer.alloc(0));
-    expect(response.headers["content-type"]).toBe("application/octet-stream");
+    expect(response.headers["content-type"]).toBe("text/plain; charset=utf-8");
   });
 
   it("deletes a request with 204, and 404s when it does not exist", async () => {

@@ -54,7 +54,8 @@ function routesWrapper(
         method,
         request_path,
         query_params,
-        headers
+        headers,
+        body_dropped
       FROM holes AS h
       INNER JOIN requests AS r USING (hole_id)
       WHERE hole_address = ?

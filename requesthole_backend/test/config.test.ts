@@ -11,6 +11,7 @@ describe("loadConfig", () => {
       maxHoles: 1000,
       maxHolesPerIp: 20,
       maxBodyBytes: 1048576,
+      allowMedia: false,
     });
   });
 
@@ -26,6 +27,7 @@ describe("loadConfig", () => {
           MAX_HOLES: "42",
           MAX_HOLES_PER_IP: "4",
           MAX_BODY_BYTES: "2048",
+          ALLOW_MEDIA: "true",
         },
       ),
     ).toEqual({
@@ -36,6 +38,7 @@ describe("loadConfig", () => {
       maxHoles: 42,
       maxHolesPerIp: 4,
       maxBodyBytes: 2048,
+      allowMedia: true,
     });
   });
 
@@ -70,5 +73,44 @@ describe("loadConfig", () => {
     ["MAX_BODY_BYTES", "1e3"],
   ])("fails fast on a nonsense %s", (name, value) => {
     expect(() => loadConfig({}, { [name]: value })).toThrow(name);
+  });
+
+  describe("ALLOW_MEDIA", () => {
+    it.each([
+      ["true", true],
+      ["TRUE", true],
+      ["True", true],
+      ["1", true],
+      ["false", false],
+      ["FALSE", false],
+      ["fAlSe", false],
+      ["0", false],
+    ])("reads %s as %s", (raw, expected) => {
+      expect(loadConfig({}, { ALLOW_MEDIA: raw }).allowMedia).toBe(expected);
+    });
+
+    it.each(["yes", "on", "no", "off", "", " true", "2"])(
+      "refuses to start on %j",
+      (raw) => {
+        expect(() => loadConfig({}, { ALLOW_MEDIA: raw })).toThrow(
+          "ALLOW_MEDIA",
+        );
+      },
+    );
+
+    it("lets the override win over the environment", () => {
+      expect(
+        loadConfig({ allowMedia: true }, { ALLOW_MEDIA: "false" }).allowMedia,
+      ).toBe(true);
+      expect(
+        loadConfig({ allowMedia: false }, { ALLOW_MEDIA: "true" }).allowMedia,
+      ).toBe(false);
+    });
+
+    it("validates the override", () => {
+      expect(() =>
+        loadConfig({ allowMedia: "true" as unknown as boolean }, {}),
+      ).toThrow("allowMedia");
+    });
   });
 });

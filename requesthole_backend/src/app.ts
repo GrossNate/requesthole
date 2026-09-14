@@ -3,6 +3,7 @@ import holesRoute from "./routes/holes";
 import holeRoutes from "./routes/hole";
 import collectRoute from "./routes/collect";
 import requestRoutes from "./routes/request";
+import configRoute from "./routes/config";
 import db from "./db";
 import retention from "./retention";
 import cors from "@fastify/cors";
@@ -13,7 +14,8 @@ import loadConfig, { ConfigOverrides } from "./config";
 
 export interface AppOptions {
   databasePath?: string;
-  logger?: boolean;
+  /** `true` for the default logger; an object for a level and stream (tests). */
+  logger?: boolean | { level?: string; stream?: { write(line: string): void } };
   requestBroadcaster?: RequestBroadcaster;
   /** Operator knobs; anything omitted falls back to the environment, then defaults. */
   config?: ConfigOverrides;
@@ -40,6 +42,11 @@ export default function buildApp(options: AppOptions = {}): FastifyInstance {
     // Over the limit, Fastify's own content-type parsing answers 413.
     bodyLimit: config.maxBodyBytes,
   });
+  if (config.allowMedia) {
+    fastify.log.info(
+      "ALLOW_MEDIA on: media and binary bodies are stored and served",
+    );
+  }
 
   // Per-route budgets only: each rate-limited route attaches its own limiter;
   // reads stay unmetered. Keyed on `request.ip`, which is the forwarded
@@ -52,7 +59,9 @@ export default function buildApp(options: AppOptions = {}): FastifyInstance {
     // The hourly limiter's 429 names its wait in Retry-After, and that is
     // how the page tells it from a share refusal. Browsers hide it from a
     // cross-origin page (the dev server) unless it is exposed.
-    exposedHeaders: ["retry-after"],
+    // The body endpoint marks a body it will not serve (ALLOW_MEDIA off) with
+    // x-requesthole-body-withheld, which the viewer reads the same way.
+    exposedHeaders: ["retry-after", "x-requesthole-body-withheld"],
   });
   fastify.register(
     db,
@@ -66,7 +75,8 @@ export default function buildApp(options: AppOptions = {}): FastifyInstance {
   fastify.register(retention, { config, requestBroadcaster });
   fastify.register(holesRoute);
   fastify.register(holeRoutes(requestBroadcaster, config));
-  fastify.register(requestRoutes(requestBroadcaster));
+  fastify.register(requestRoutes(requestBroadcaster, config));
+  fastify.register(configRoute(config));
   fastify.register(collectRoute(requestBroadcaster, config));
 
   return fastify;
