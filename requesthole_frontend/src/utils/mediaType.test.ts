@@ -133,3 +133,24 @@ describe("classifyBody", () => {
     expect(family(undefined)).toBe("binary");
   });
 });
+
+describe("classifyBody's top-level gate", () => {
+  // Same gate as the backend's filter: suffix rules apply only under the
+  // top-level types that can carry text, so a media type never renders as
+  // JSON or XML because of its suffix.
+  it.each([
+    ["image/foo+json", "image"],
+    ["image/svg+xml", "image"],
+    ["video/lottie+json", "binary"],
+    ["model/gltf+json", "binary"],
+    ["audio/foo+xml", "binary"],
+    ["font/collection+json", "binary"],
+    ["message/rfc822", "binary"],
+    ["x-custom/json", "binary"],
+    ["multipart/mixed", "binary"],
+    ["application/vnd.api+json", "json"],
+    ["text/html", "html"],
+  ])("classifies %s as %s", (header, family) => {
+    expect(classifyBody(parseMediaType(header))).toBe(family);
+  });
+});

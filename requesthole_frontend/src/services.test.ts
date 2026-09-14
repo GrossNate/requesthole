@@ -164,3 +164,71 @@ describe("a hole creation the backend refuses", () => {
     );
   });
 });
+
+describe("instance config", () => {
+  it("reports media allowed only when the backend says exactly that", async () => {
+    vi.mocked(axios.get).mockResolvedValue({
+      status: 200,
+      data: { allowMedia: true },
+    });
+    await expect(holeService.getConfig()).resolves.toEqual({
+      allowMedia: true,
+    });
+    expect(axios.get).toHaveBeenCalledWith(
+      `${holeService.BASE_URL}/api/config`,
+    );
+  });
+
+  // A missing answer must be safe: anything but a well-formed yes is media off.
+  it.for([
+    [
+      "a failed fetch",
+      () => vi.mocked(axios.get).mockRejectedValue(new Error("down")),
+    ],
+    [
+      "a non-boolean",
+      () =>
+        vi
+          .mocked(axios.get)
+          .mockResolvedValue({ status: 200, data: { allowMedia: "true" } }),
+    ],
+    [
+      "an HTML page",
+      () =>
+        vi
+          .mocked(axios.get)
+          .mockResolvedValue({ status: 200, data: "<!doctype html>" }),
+    ],
+    [
+      "no body",
+      () => vi.mocked(axios.get).mockResolvedValue({ status: 200, data: null }),
+    ],
+  ] as const)("treats %s as media off", async ([, arrange]) => {
+    arrange();
+    await expect(holeService.getConfig()).resolves.toEqual({
+      allowMedia: false,
+    });
+  });
+});
+
+describe("body bytes", () => {
+  it("passes the bytes through, not withheld", async () => {
+    const data = new ArrayBuffer(3);
+    vi.mocked(axios.get).mockResolvedValue({ status: 200, data, headers: {} });
+    await expect(holeService.getBodyBytes("abc123")).resolves.toEqual({
+      bytes: data,
+      withheld: false,
+    });
+  });
+
+  it("reports a body the backend withheld", async () => {
+    vi.mocked(axios.get).mockResolvedValue({
+      status: 200,
+      data: new ArrayBuffer(0),
+      headers: { "x-requesthole-body-withheld": "true" },
+    });
+    await expect(holeService.getBodyBytes("abc123")).resolves.toMatchObject({
+      withheld: true,
+    });
+  });
+});

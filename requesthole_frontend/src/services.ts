@@ -1,6 +1,12 @@
 import axios from "axios";
 import { HoleGoneError, HoleLimitError } from "./errors";
-import type { RequestObject } from "./types";
+import type { InstanceConfig, RequestObject } from "./types";
+
+export interface BodyBytes {
+  bytes: ArrayBuffer;
+  /** The backend refused to serve this body (media off). */
+  withheld: boolean;
+}
 import { isAddress } from "./utils/address";
 
 const BASE_URL = import.meta.env.DEV ? "http://localhost:3000" : "";
@@ -144,12 +150,33 @@ async function deleteRequest(requestAddress: string): Promise<boolean> {
  * charset itself (axios would guess), and downloads go through a blob the app
  * creates instead of navigating to the body endpoint.
  */
-async function getBodyBytes(requestAddress: string): Promise<ArrayBuffer> {
+async function getBodyBytes(requestAddress: string): Promise<BodyBytes> {
   const response = await axios.get<ArrayBuffer>(
     `${BASE_URL}/api/request/${addressPath(requestAddress)}/body`,
     { responseType: "arraybuffer" },
   );
-  return response.data;
+  return {
+    bytes: response.data,
+    // With ALLOW_MEDIA off the backend answers a body it will not serve
+    // (captured while media was on) with an empty 200 and this header.
+    withheld: response.headers?.["x-requesthole-body-withheld"] === "true",
+  };
+}
+
+/**
+ * What the viewer needs to know about the instance. Fail-closed: a failed
+ * fetch or anything but a boolean `allowMedia` reads as media off, so a
+ * missing answer can never switch image rendering on.
+ */
+async function getConfig(): Promise<InstanceConfig> {
+  try {
+    const response = await axios.get<unknown>(`${BASE_URL}/api/config`);
+    const data = response.data as { allowMedia?: unknown } | null;
+    return { allowMedia: data?.allowMedia === true };
+  } catch (error) {
+    console.error(error);
+    return { allowMedia: false };
+  }
 }
 
 export default {
@@ -161,5 +188,6 @@ export default {
   getRequest,
   deleteRequest,
   getBodyBytes,
+  getConfig,
   BASE_URL,
 };

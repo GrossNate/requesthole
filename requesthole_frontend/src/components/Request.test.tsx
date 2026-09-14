@@ -43,7 +43,10 @@ beforeEach(() => {
   vi.mocked(holeService.getRequest).mockResolvedValue(
     captured('{"user-agent":"curl/8.7.1"}'),
   );
-  vi.mocked(holeService.getBodyBytes).mockResolvedValue(new ArrayBuffer(0));
+  vi.mocked(holeService.getBodyBytes).mockResolvedValue({
+    bytes: new ArrayBuffer(0),
+    withheld: false,
+  });
 });
 
 afterEach(() => {
@@ -88,9 +91,10 @@ describe("Request body", () => {
     vi.mocked(holeService.getRequest).mockResolvedValue(
       captured('{"content-type":"application/json"}'),
     );
-    vi.mocked(holeService.getBodyBytes).mockResolvedValue(
-      toBytes('{"hello":"world"}'),
-    );
+    vi.mocked(holeService.getBodyBytes).mockResolvedValue({
+      bytes: toBytes('{"hello":"world"}'),
+      withheld: false,
+    });
     const { container } = renderRequest();
 
     await waitFor(() =>
@@ -104,9 +108,10 @@ describe("Request body", () => {
     vi.mocked(holeService.getRequest).mockResolvedValue(
       captured('{"content-type":"text/plain"}'),
     );
-    vi.mocked(holeService.getBodyBytes).mockResolvedValue(
-      toBytes("a plain text body"),
-    );
+    vi.mocked(holeService.getBodyBytes).mockResolvedValue({
+      bytes: toBytes("a plain text body"),
+      withheld: false,
+    });
     renderRequest();
 
     await screen.findByText("a plain text body");
@@ -218,5 +223,20 @@ describe("Request load state", () => {
       await screen.findByText(/not a valid request address/i),
     ).toBeVisible();
     expect(holeService.getRequest).not.toHaveBeenCalled();
+  });
+});
+
+describe("a request the media gate dropped from", () => {
+  it("shows the drop notice from the request's metadata", async () => {
+    vi.mocked(holeService.getRequest).mockResolvedValue({
+      ...captured('{"content-type":"image/png"}'),
+      body_dropped: '{"reason":"type","bytes":48213,"contentType":"image/png"}',
+    });
+    renderRequest();
+
+    expect(
+      await screen.findByText("Media/binary data dropped: 47 KB, image/png"),
+    ).toBeVisible();
+    expect(document.querySelector("img")).toBeNull();
   });
 });

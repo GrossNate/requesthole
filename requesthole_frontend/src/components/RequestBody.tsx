@@ -6,6 +6,13 @@ import { hexPreview } from "../utils/hexPreview";
 import { parseMultipart, type MultipartPart } from "../utils/multipart";
 import { prettyJson, prettyNdjson, prettyXml } from "../utils/prettyPrint";
 import { highlightCode, type HighlightLanguage } from "../utils/highlight";
+import { useAllowMedia } from "../mediaConfigContext";
+import {
+  describeDrop,
+  describePartDrop,
+  type BodyDropped,
+  type PartDrop,
+} from "../utils/bodyDropped";
 
 /**
  * How much of a body the viewer will render as DOM text. Pretty-printing a
@@ -91,6 +98,16 @@ const DownloadLink = ({
   </div>
 );
 
+/**
+ * Where the media gate took content away: says what arrived instead of
+ * showing an empty panel. The description is sender-controlled text.
+ */
+const DropNotice = ({ children }: { children: React.ReactNode }) => (
+  <p className="text-caption text-base-content/70 border-base-300 bg-base-200/50 px-gutter py-snug rounded-box border border-dashed">
+    {children}
+  </p>
+);
+
 export const BodySection = ({ children }: { children: React.ReactNode }) => (
   <section className="gap-tight flex flex-col">
     <h2 className="section-label">Body</h2>
@@ -135,35 +152,61 @@ function decodeBytes(bytes: Uint8Array, charset: string | undefined): string {
 /**
  * The content-aware body viewer: fetches the captured bytes once per request
  * address and dispatches on the parsed media type. Captured bodies are
- * attacker-controlled — every path renders them as React text children (or an
- * inert <img>/download); nothing here may ever emit them as markup.
+ * attacker-controlled — every path renders them as React text children (or,
+ * with media allowed, an inert <img>/download); nothing here may ever emit
+ * them as markup.
+ *
+ * With media off (the default, and whenever the instance config is unknown)
+ * it never builds an <img> or a blob for binary content: image types get the
+ * hex preview without a download, and an untyped body is text, since the
+ * backend only keeps text.
  */
 const RequestBody = ({
   requestAddress,
   contentType,
+  dropped,
 }: {
   requestAddress: string;
   contentType: string | undefined;
+  /** What the media gate dropped from this request, if anything. */
+  dropped?: BodyDropped | undefined;
 }) => {
+  const allowMedia = useAllowMedia();
   const media = parseMediaType(contentType);
-  const family = classifyBody(media);
+  const declaredFamily = classifyBody(media);
+  const family = allowMedia
+    ? declaredFamily
+    : media === undefined
+      ? "text"
+      : declaredFamily === "image"
+        ? "binary"
+        : declaredFamily;
   const charset = media?.parameters["charset"];
+  const wholeDrop = dropped?.kind === "whole" ? dropped : undefined;
+  const droppedParts = dropped?.kind === "parts" ? dropped.parts : undefined;
+  // A boolean, not the object: callers parse the description per render.
+  const bodyWasDropped = wholeDrop !== undefined;
 
   const [bytes, setBytes] = useState<Uint8Array>();
+  const [withheld, setWithheld] = useState(false);
   const [failed, setFailed] = useState(false);
   const [imageFailed, setImageFailed] = useState(false);
 
   useEffect(() => {
     setImageFailed(false);
-    if (family === "image") return;
+    // A dropped body was stored empty; there is nothing to fetch.
+    if (family === "image" || bodyWasDropped) return;
     let current = true;
     setBytes(undefined);
+    setWithheld(false);
     setFailed(false);
 
     holeService
       .getBodyBytes(requestAddress)
-      .then((buffer) => {
-        if (current) setBytes(new Uint8Array(buffer));
+      .then((body) => {
+        if (!current) return;
+        setWithheld(body.withheld);
+        setBytes(new Uint8Array(body.bytes));
       })
       .catch((error) => {
         console.error(error);
@@ -173,7 +216,15 @@ const RequestBody = ({
     return () => {
       current = false;
     };
-  }, [requestAddress, family]);
+  }, [requestAddress, family, bodyWasDropped]);
+
+  if (wholeDrop !== undefined) {
+    return (
+      <BodySection>
+        <DropNotice>{describeDrop(wholeDrop)}</DropNotice>
+      </BodySection>
+    );
+  }
 
   if (family === "image") {
     // A bare broken-image glyph explains nothing; every other family has an
@@ -212,6 +263,14 @@ const RequestBody = ({
 
   if (bytes === undefined) return null;
 
+  if (withheld) {
+    return (
+      <BodySection>
+        <DropNotice>Media/binary data not shown on this instance</DropNotice>
+      </BodySection>
+    );
+  }
+
   if (bytes.byteLength === 0) {
     return (
       <BodySection>
@@ -233,6 +292,7 @@ const RequestBody = ({
         bytes={bytes}
         requestAddress={requestAddress}
         subtype={media?.subtype}
+        downloadable={allowMedia}
       />
     );
   }
@@ -244,6 +304,8 @@ const RequestBody = ({
         boundary={media?.parameters["boundary"] ?? ""}
         charset={charset}
         requestAddress={requestAddress}
+        allowMedia={allowMedia}
+        droppedParts={droppedParts}
       />
     );
   }
@@ -441,11 +503,16 @@ const MultipartBody = ({
   boundary,
   charset,
   requestAddress,
+  allowMedia,
+  droppedParts,
 }: {
   bytes: Uint8Array;
   boundary: string;
   charset: string | undefined;
   requestAddress: string;
+  allowMedia: boolean;
+  /** Parts the media gate emptied, matched to parsed parts by index. */
+  droppedParts: PartDrop[] | undefined;
 }) => {
   // Byte-scanning the whole body per render would repeat on every parent
   // state change; parts must also be referentially stable so each image
@@ -520,7 +587,11 @@ const MultipartBody = ({
               ) : null}
             </div>
             <div className="px-gutter py-snug">
-              <MultipartPartContent part={part} />
+              <MultipartPartContent
+                part={part}
+                allowMedia={allowMedia}
+                dropped={droppedParts?.find((drop) => drop.index === index)}
+              />
             </div>
           </li>
         ))}
@@ -532,11 +603,21 @@ const MultipartBody = ({
   );
 };
 
-const MultipartPartContent = ({ part }: { part: MultipartPart }) => {
+const MultipartPartContent = ({
+  part,
+  allowMedia,
+  dropped,
+}: {
+  part: MultipartPart;
+  allowMedia: boolean;
+  dropped: PartDrop | undefined;
+}) => {
   const partMedia = parseMediaType(part.contentType);
   const family = classifyBody(partMedia);
   const isRaster =
-    family === "image" && RASTER_IMAGE_SUBTYPES.has(partMedia!.subtype);
+    allowMedia &&
+    family === "image" &&
+    RASTER_IMAGE_SUBTYPES.has(partMedia!.subtype);
   // A part with no content-type is text by multipart convention; declared
   // text-ish families render as text too. Everything else — including
   // non-raster images like SVG, which could execute as a document — gets the
@@ -545,7 +626,15 @@ const MultipartPartContent = ({ part }: { part: MultipartPart }) => {
   const isTextual =
     part.contentType === undefined ||
     (family !== "binary" && family !== "image" && family !== "multipart");
-  const blobUrl = useOwnedBlobUrl(part.bytes, !isTextual);
+  const blobUrl = useOwnedBlobUrl(
+    part.bytes,
+    allowMedia && !isTextual && dropped === undefined,
+  );
+
+  // The part's headers survived; its content did not.
+  if (dropped !== undefined) {
+    return <DropNotice>{describePartDrop(dropped)}</DropNotice>;
+  }
 
   if (isRaster) {
     return blobUrl ? (
@@ -585,10 +674,12 @@ const MultipartPartContent = ({ part }: { part: MultipartPart }) => {
         {part.bytes.byteLength.toLocaleString()} bytes
       </span>
       <CodeBlock text={hexPreview(part.bytes)} />
-      <DownloadLink
-        url={blobUrl}
-        filename={part.filename ?? `${part.name ?? "part"}.bin`}
-      />
+      {allowMedia ? (
+        <DownloadLink
+          url={blobUrl}
+          filename={part.filename ?? `${part.name ?? "part"}.bin`}
+        />
+      ) : null}
     </div>
   );
 };
@@ -606,12 +697,15 @@ const BinaryBody = ({
   bytes,
   requestAddress,
   subtype,
+  downloadable,
 }: {
   bytes: Uint8Array;
   requestAddress: string;
   subtype: string | undefined;
+  /** False with media off: no blob is ever built for binary content. */
+  downloadable: boolean;
 }) => {
-  const downloadUrl = useOwnedBlobUrl(bytes);
+  const downloadUrl = useOwnedBlobUrl(bytes, downloadable);
   const extension = DOWNLOAD_EXTENSIONS[subtype ?? ""] ?? "bin";
 
   return (
@@ -621,10 +715,12 @@ const BinaryBody = ({
         {subtype ? ` · ${subtype}` : ""} — showing the first bytes.
       </p>
       <CodeBlock text={hexPreview(bytes)} />
-      <DownloadLink
-        url={downloadUrl}
-        filename={`${requestAddress}.${extension}`}
-      />
+      {downloadable ? (
+        <DownloadLink
+          url={downloadUrl}
+          filename={`${requestAddress}.${extension}`}
+        />
+      ) : null}
     </BodySection>
   );
 };

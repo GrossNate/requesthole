@@ -128,9 +128,13 @@ export function classifyBody(media: MediaType | undefined): BodyFamily {
   const { type, subtype, suffix } = media;
 
   if (type === "image") return "image";
+  if (type === "multipart")
+    return subtype === "form-data" ? "multipart" : "binary";
+  // The backend's top-level gate: suffix and subtype rules apply only under
+  // the types that can carry text, so `video/lottie+json` is not JSON.
+  if (type !== "application" && type !== "text") return "binary";
   if (type === "application" && subtype === "x-www-form-urlencoded")
     return "form";
-  if (type === "multipart" && subtype === "form-data") return "multipart";
   if (NDJSON_SUBTYPES.has(subtype)) return "ndjson";
   if (subtype === "json" || suffix === "json") return "json";
   if (subtype === "xml" || suffix === "xml") return "xml";

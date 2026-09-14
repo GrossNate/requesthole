@@ -7,6 +7,7 @@ import { useHoleStream, type ConnectionState } from "../hooks/useHoleStream";
 import { formatQueryParams, formatTimestamp } from "../utils/format";
 import { holeCaptureUrl } from "../utils/holeUrl";
 import { isAddress } from "../utils/address";
+import { parseBodyDropped, summarizeDrop } from "../utils/bodyDropped";
 import CopyButton from "./CopyButton";
 import EmptyState from "./EmptyState";
 import MethodBadge from "./MethodBadge";
@@ -77,6 +78,9 @@ const RequestRow = memo(function RequestRow({
   onDelete: (requestAddress: string) => void;
 }) {
   const params = formatQueryParams(request.query_params);
+  const dropped = parseBodyDropped(request.body_dropped);
+  const dropSummary =
+    dropped === undefined ? undefined : summarizeDrop(dropped);
   const link = `/view/${holeAddress}/${request.request_address}`;
   // The row is clickable for the mouse; the path cell carries the one link, so
   // the keyboard gets a single stop per row rather than four identical ones.
@@ -110,13 +114,28 @@ const RequestRow = memo(function RequestRow({
             location, so saying so here is a line no test can distinguish. The
             row handler below is where the duplicate entry actually came
             from. */}
-        <Link
-          to={link}
-          className="address text-base-content block truncate hover:underline"
-          title={request.request_path}
-        >
-          {request.request_path}
-        </Link>
+        <div className="gap-snug flex items-center">
+          <Link
+            to={link}
+            className="address text-base-content block min-w-0 truncate hover:underline"
+            title={request.request_path}
+          >
+            {request.request_path}
+          </Link>
+          {/* Muted, and no tab stop: the row's link already leads to the
+              full notice. The label carries the size and type for a screen
+              reader; the title shows it on hover. */}
+          {dropSummary === undefined ? null : (
+            <span
+              role="img"
+              aria-label={dropSummary}
+              title={dropSummary}
+              className="badge badge-ghost badge-xs text-base-content/60 shrink-0"
+            >
+              dropped
+            </span>
+          )}
+        </div>
       </td>
       {shared ? null : (
         <td className={`address text-base-content/70 truncate ${PARAMS_CELL}`}>

@@ -5,6 +5,8 @@ import RequestBody, {
   DISPLAY_CAP_BYTES,
   MAX_RENDERED_ROWS,
 } from "./RequestBody";
+import { MediaConfigContext } from "../mediaConfigContext";
+import { parseBodyDropped, type BodyDropped } from "../utils/bodyDropped";
 
 vi.mock("../services", () => ({
   default: {
@@ -18,13 +20,34 @@ const toBytes = (text: string) => {
   return encoded.buffer.slice(0, encoded.byteLength) as ArrayBuffer;
 };
 
-const renderBody = (contentType: string | undefined) =>
-  render(<RequestBody requestAddress="req001" contentType={contentType} />);
+/** The bytes the body endpoint answered with, not withheld. */
+const served = (bytes: ArrayBuffer) => ({ bytes, withheld: false });
+
+// These tests document the viewer with ALLOW_MEDIA on — the behaviour the
+// gate leaves exactly as it was. Media off is its own describe block below.
+const renderBody = (
+  contentType: string | undefined,
+  {
+    allowMedia = true,
+    dropped,
+  }: { allowMedia?: boolean; dropped?: BodyDropped } = {},
+) =>
+  render(
+    <MediaConfigContext.Provider value={allowMedia}>
+      <RequestBody
+        requestAddress="req001"
+        contentType={contentType}
+        dropped={dropped}
+      />
+    </MediaConfigContext.Provider>,
+  );
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
 
 beforeEach(() => {
-  vi.mocked(holeService.getBodyBytes).mockResolvedValue(new ArrayBuffer(0));
+  vi.mocked(holeService.getBodyBytes).mockResolvedValue(
+    served(new ArrayBuffer(0)),
+  );
 });
 
 afterEach(() => {
@@ -35,7 +58,7 @@ afterEach(() => {
 describe("JSON bodies", () => {
   it("pretty-prints and highlights a JSON body, fetching it exactly once", async () => {
     vi.mocked(holeService.getBodyBytes).mockResolvedValue(
-      toBytes('{"hello":"world"}'),
+      served(toBytes('{"hello":"world"}')),
     );
     const { container } = renderBody("application/json");
 
@@ -53,7 +76,9 @@ describe("JSON bodies", () => {
   // Substring matching sent vendor subtypes to a blank panel; GitHub-style
   // webhooks use them routinely.
   it("treats a vendor +json subtype with a charset parameter as JSON", async () => {
-    vi.mocked(holeService.getBodyBytes).mockResolvedValue(toBytes('{"id":7}'));
+    vi.mocked(holeService.getBodyBytes).mockResolvedValue(
+      served(toBytes('{"id":7}')),
+    );
     const { container } = renderBody("application/vnd.api+json; charset=utf-8");
 
     await screen.findByText(/"id"/);
@@ -65,7 +90,7 @@ describe("JSON bodies", () => {
     // a replacement character.
     const latin1 = new Uint8Array([34, 99, 97, 102, 0xe9, 34]); // "café"
     vi.mocked(holeService.getBodyBytes).mockResolvedValue(
-      latin1.buffer as ArrayBuffer,
+      served(latin1.buffer as ArrayBuffer),
     );
     const { container } = renderBody("application/json; charset=iso-8859-1");
 
@@ -77,7 +102,7 @@ describe("JSON bodies", () => {
   // explicit note, never a thrown error or a silent nothing.
   it("falls back to raw text with a note when the JSON does not parse", async () => {
     vi.mocked(holeService.getBodyBytes).mockResolvedValue(
-      toBytes('{"unclosed":'),
+      served(toBytes('{"unclosed":')),
     );
     const { container } = renderBody("application/json");
 
@@ -98,7 +123,7 @@ describe("JSON bodies", () => {
   // back to UTF-8, never let TextDecoder's RangeError take the view down.
   it("falls back to UTF-8 when the charset label is junk", async () => {
     vi.mocked(holeService.getBodyBytes).mockResolvedValue(
-      toBytes('{"ok":true}'),
+      served(toBytes('{"ok":true}')),
     );
     const { container } = renderBody(
       "application/json; charset=x-attacker-junk",
@@ -112,7 +137,7 @@ describe("JSON bodies", () => {
 describe("other structured text bodies", () => {
   it("indents and highlights an XML body", async () => {
     vi.mocked(holeService.getBodyBytes).mockResolvedValue(
-      toBytes("<order><id>7</id></order>"),
+      served(toBytes("<order><id>7</id></order>")),
     );
     const { container } = renderBody("application/xml");
 
@@ -129,7 +154,7 @@ describe("other structured text bodies", () => {
 
   it("formats each NDJSON line as its own document", async () => {
     vi.mocked(holeService.getBodyBytes).mockResolvedValue(
-      toBytes('{"a":1}\n{"b":2}\n'),
+      served(toBytes('{"a":1}\n{"b":2}\n')),
     );
     const { container } = renderBody("application/x-ndjson");
 
@@ -139,7 +164,7 @@ describe("other structured text bodies", () => {
 
   it("highlights a YAML body as sent — it is already line-oriented", async () => {
     vi.mocked(holeService.getBodyBytes).mockResolvedValue(
-      toBytes("name: hole\nsize: 6\n"),
+      served(toBytes("name: hole\nsize: 6\n")),
     );
     const { container } = renderBody("application/yaml");
 
@@ -154,7 +179,7 @@ describe("other structured text bodies", () => {
   // document to render on this origin.
   it("shows an HTML body as escaped source, never as markup", async () => {
     vi.mocked(holeService.getBodyBytes).mockResolvedValue(
-      toBytes('<img src=x onerror="alert(1)"><p>hi</p>'),
+      served(toBytes('<img src=x onerror="alert(1)"><p>hi</p>')),
     );
     const { container } = renderBody("text/html");
 
@@ -165,7 +190,7 @@ describe("other structured text bodies", () => {
 
   it("renders plain text verbatim without highlighting", async () => {
     vi.mocked(holeService.getBodyBytes).mockResolvedValue(
-      toBytes("just some words"),
+      served(toBytes("just some words")),
     );
     const { container } = renderBody("text/plain");
 
@@ -177,7 +202,7 @@ describe("other structured text bodies", () => {
 describe("form-encoded bodies", () => {
   it("decodes parameters into a key/value table", async () => {
     vi.mocked(holeService.getBodyBytes).mockResolvedValue(
-      toBytes("flavor=vanilla&topping=hot+fudge%21"),
+      served(toBytes("flavor=vanilla&topping=hot+fudge%21")),
     );
     renderBody("application/x-www-form-urlencoded");
 
@@ -194,7 +219,7 @@ describe("form-encoded bodies", () => {
   it("pretty-prints a value that is itself JSON", async () => {
     const payload = encodeURIComponent('{"action":"opened","number":7}');
     vi.mocked(holeService.getBodyBytes).mockResolvedValue(
-      toBytes(`payload=${payload}`),
+      served(toBytes(`payload=${payload}`)),
     );
     const { container } = renderBody("application/x-www-form-urlencoded");
 
@@ -214,7 +239,9 @@ describe("form-encoded bodies", () => {
       { length: MAX_RENDERED_ROWS + 500 },
       (_, i) => `k${i}=v${i}`,
     ).join("&");
-    vi.mocked(holeService.getBodyBytes).mockResolvedValue(toBytes(pairs));
+    vi.mocked(holeService.getBodyBytes).mockResolvedValue(
+      served(toBytes(pairs)),
+    );
     const { container } = renderBody("application/x-www-form-urlencoded");
 
     await screen.findByText(/500 more pairs not shown/i);
@@ -232,7 +259,9 @@ describe("form-encoded bodies", () => {
       { length: MAX_RENDERED_ROWS },
       (_, i) => `k${i}=v${i}`,
     ).join("&");
-    vi.mocked(holeService.getBodyBytes).mockResolvedValue(toBytes(pairs));
+    vi.mocked(holeService.getBodyBytes).mockResolvedValue(
+      served(toBytes(pairs)),
+    );
     const { container } = renderBody("application/x-www-form-urlencoded");
 
     // Waited for by counting rows rather than by `findByRole(…, { name })`:
@@ -272,7 +301,9 @@ describe("multipart bodies", () => {
       createObjectURL: vi.fn(() => "blob:part"),
       revokeObjectURL: vi.fn(),
     });
-    vi.mocked(holeService.getBodyBytes).mockResolvedValue(multipartFixture());
+    vi.mocked(holeService.getBodyBytes).mockResolvedValue(
+      served(multipartFixture()),
+    );
     renderBody("multipart/form-data; boundary=B");
 
     expect(await screen.findByText("comment")).toBeVisible();
@@ -295,7 +326,9 @@ describe("multipart bodies", () => {
       return "blob:part";
     });
     vi.stubGlobal("URL", { createObjectURL, revokeObjectURL: vi.fn() });
-    vi.mocked(holeService.getBodyBytes).mockResolvedValue(multipartFixture());
+    vi.mocked(holeService.getBodyBytes).mockResolvedValue(
+      served(multipartFixture()),
+    );
     const { container } = renderBody("multipart/form-data; boundary=B");
 
     await screen.findByText("cat.png");
@@ -320,16 +353,18 @@ describe("multipart bodies", () => {
     });
     vi.stubGlobal("URL", { createObjectURL, revokeObjectURL: vi.fn() });
     vi.mocked(holeService.getBodyBytes).mockResolvedValue(
-      toBytes(
-        [
-          "--B",
-          'content-disposition: form-data; name="pic"; filename="evil.svg"',
-          "content-type: image/svg+xml",
-          "",
-          '<svg onload="alert(1)"></svg>',
-          "--B--",
-          "",
-        ].join("\r\n"),
+      served(
+        toBytes(
+          [
+            "--B",
+            'content-disposition: form-data; name="pic"; filename="evil.svg"',
+            "content-type: image/svg+xml",
+            "",
+            '<svg onload="alert(1)"></svg>',
+            "--B--",
+            "",
+          ].join("\r\n"),
+        ),
       ),
     );
     const { container } = renderBody("multipart/form-data; boundary=B");
@@ -349,17 +384,19 @@ describe("multipart bodies", () => {
       revokeObjectURL: vi.fn(),
     });
     vi.mocked(holeService.getBodyBytes).mockResolvedValue(
-      toBytes(
-        [
-          "--B",
-          "header-with-no-blank-line",
-          "--B",
-          'content-disposition: form-data; name="ok"',
-          "",
-          "good part",
-          "--B--",
-          "",
-        ].join("\r\n"),
+      served(
+        toBytes(
+          [
+            "--B",
+            "header-with-no-blank-line",
+            "--B",
+            'content-disposition: form-data; name="ok"',
+            "",
+            "good part",
+            "--B--",
+            "",
+          ].join("\r\n"),
+        ),
       ),
     );
     renderBody("multipart/form-data; boundary=B");
@@ -380,7 +417,7 @@ describe("multipart bodies", () => {
         `--B\r\ncontent-disposition: form-data; name="p${i}"\r\n\r\nv\r\n`,
     ).join("");
     vi.mocked(holeService.getBodyBytes).mockResolvedValue(
-      toBytes(`${parts}--B--\r\n`),
+      served(toBytes(`${parts}--B--\r\n`)),
     );
     const { container } = renderBody("multipart/form-data; boundary=B");
 
@@ -398,16 +435,18 @@ describe("multipart bodies", () => {
     });
     vi.stubGlobal("URL", { createObjectURL, revokeObjectURL: vi.fn() });
     vi.mocked(holeService.getBodyBytes).mockResolvedValue(
-      toBytes(
-        [
-          "--B",
-          'content-disposition: form-data; name="doc"; filename="report.pdf"',
-          "content-type: application/pdf",
-          "",
-          "%PDF-1.7 pretend",
-          "--B--",
-          "",
-        ].join("\r\n"),
+      served(
+        toBytes(
+          [
+            "--B",
+            'content-disposition: form-data; name="doc"; filename="report.pdf"',
+            "content-type: application/pdf",
+            "",
+            "%PDF-1.7 pretend",
+            "--B--",
+            "",
+          ].join("\r\n"),
+        ),
       ),
     );
     const { container } = renderBody("multipart/form-data; boundary=B");
@@ -426,8 +465,10 @@ describe("multipart bodies", () => {
   it("truncates an oversized text part rather than dumping it whole", async () => {
     const huge = "z".repeat(DISPLAY_CAP_BYTES + 100);
     vi.mocked(holeService.getBodyBytes).mockResolvedValue(
-      toBytes(
-        `--B\r\ncontent-disposition: form-data; name="big"\r\n\r\n${huge}\r\n--B--\r\n`,
+      served(
+        toBytes(
+          `--B\r\ncontent-disposition: form-data; name="big"\r\n\r\n${huge}\r\n--B--\r\n`,
+        ),
       ),
     );
     renderBody("multipart/form-data; boundary=B");
@@ -439,7 +480,7 @@ describe("multipart bodies", () => {
   // content: raw text with a note, never a throw or an empty panel.
   it("falls back to raw text with a note when the boundary never appears", async () => {
     vi.mocked(holeService.getBodyBytes).mockResolvedValue(
-      toBytes("no boundary in here"),
+      served(toBytes("no boundary in here")),
     );
     const { container } = renderBody("multipart/form-data; boundary=B");
 
@@ -457,7 +498,7 @@ describe("binary and unknown bodies", () => {
       revokeObjectURL: vi.fn(),
     });
     vi.mocked(holeService.getBodyBytes).mockResolvedValue(
-      toBytes("GIF89a\x01\x02"),
+      served(toBytes("GIF89a\x01\x02")),
     );
     const { container } = renderBody("application/whoknows");
 
@@ -477,7 +518,9 @@ describe("binary and unknown bodies", () => {
       createObjectURL: vi.fn(() => "blob:fake"),
       revokeObjectURL: vi.fn(),
     });
-    vi.mocked(holeService.getBodyBytes).mockResolvedValue(toBytes("%PDF-1.7"));
+    vi.mocked(holeService.getBodyBytes).mockResolvedValue(
+      served(toBytes("%PDF-1.7")),
+    );
     renderBody("application/pdf");
 
     const download = await screen.findByRole("link", { name: /download/i });
@@ -492,7 +535,7 @@ describe("binary and unknown bodies", () => {
       revokeObjectURL: vi.fn(),
     });
     vi.mocked(holeService.getBodyBytes).mockResolvedValue(
-      toBytes("mystery bytes"),
+      served(toBytes("mystery bytes")),
     );
     renderBody(undefined);
 
@@ -505,7 +548,9 @@ describe("binary and unknown bodies", () => {
       createObjectURL: vi.fn(() => "blob:fake"),
       revokeObjectURL,
     });
-    vi.mocked(holeService.getBodyBytes).mockResolvedValue(toBytes("%PDF-1.7"));
+    vi.mocked(holeService.getBodyBytes).mockResolvedValue(
+      served(toBytes("%PDF-1.7")),
+    );
     const { unmount } = renderBody("application/pdf");
     await screen.findByRole("link", { name: /download/i });
 
@@ -520,7 +565,7 @@ describe("binary and unknown bodies", () => {
   it("creates no blob when the fetch lands after the viewer is gone", async () => {
     const createObjectURL = vi.fn(() => "blob:fake");
     vi.stubGlobal("URL", { createObjectURL, revokeObjectURL: vi.fn() });
-    let resolveBytes: (bytes: ArrayBuffer) => void = () => {};
+    let resolveBytes: (body: ReturnType<typeof served>) => void = () => {};
     vi.mocked(holeService.getBodyBytes).mockReturnValue(
       new Promise((resolve) => {
         resolveBytes = resolve;
@@ -529,7 +574,7 @@ describe("binary and unknown bodies", () => {
     const { unmount } = renderBody("application/pdf");
 
     unmount();
-    resolveBytes(toBytes("%PDF-1.7"));
+    resolveBytes(served(toBytes("%PDF-1.7")));
     await settle();
 
     expect(createObjectURL).not.toHaveBeenCalled();
@@ -540,14 +585,18 @@ describe("empty bodies", () => {
   // A GET with no body used to render nothing at all; the viewer must state
   // what was captured, including "nothing".
   it("says explicitly that the body is empty when there are zero bytes", async () => {
-    vi.mocked(holeService.getBodyBytes).mockResolvedValue(new ArrayBuffer(0));
+    vi.mocked(holeService.getBodyBytes).mockResolvedValue(
+      served(new ArrayBuffer(0)),
+    );
     renderBody("application/json");
 
     expect(await screen.findByText(/empty body/i)).toBeVisible();
   });
 
   it("says so for a request with no content-type and no bytes", async () => {
-    vi.mocked(holeService.getBodyBytes).mockResolvedValue(new ArrayBuffer(0));
+    vi.mocked(holeService.getBodyBytes).mockResolvedValue(
+      served(new ArrayBuffer(0)),
+    );
     renderBody(undefined);
 
     expect(await screen.findByText(/empty body/i)).toBeVisible();
@@ -562,7 +611,7 @@ describe("the display cap", () => {
       revokeObjectURL: vi.fn(),
     });
     vi.mocked(holeService.getBodyBytes).mockResolvedValue(
-      toBytes("x".repeat(DISPLAY_CAP_BYTES + 1)),
+      served(toBytes("x".repeat(DISPLAY_CAP_BYTES + 1))),
     );
     const { container } = renderBody("text/plain");
 
@@ -585,7 +634,7 @@ describe("the display cap", () => {
     });
     const big = new Uint8Array(DISPLAY_CAP_BYTES + 10).fill(0x47);
     vi.mocked(holeService.getBodyBytes).mockResolvedValue(
-      big.buffer as ArrayBuffer,
+      served(big.buffer as ArrayBuffer),
     );
     const { container } = renderBody("application/octet-stream");
 
@@ -604,7 +653,7 @@ describe("the display cap", () => {
     // 0xe9 is "é" in latin-1; decoded as UTF-8 it is a replacement character.
     const big = new Uint8Array(DISPLAY_CAP_BYTES + 1).fill(0xe9);
     vi.mocked(holeService.getBodyBytes).mockResolvedValue(
-      big.buffer as ArrayBuffer,
+      served(big.buffer as ArrayBuffer),
     );
     const { container } = renderBody("text/plain; charset=iso-8859-1");
 
@@ -614,7 +663,7 @@ describe("the display cap", () => {
 
   it("renders a body exactly at the cap in full, untruncated", async () => {
     vi.mocked(holeService.getBodyBytes).mockResolvedValue(
-      toBytes("y".repeat(DISPLAY_CAP_BYTES)),
+      served(toBytes("y".repeat(DISPLAY_CAP_BYTES))),
     );
     const { container } = renderBody("text/plain");
 
@@ -653,5 +702,131 @@ describe("image bodies", () => {
       await screen.findByText(/couldn't display this image/i),
     ).toBeVisible();
     expect(container.querySelector("img")).toBeNull();
+  });
+});
+
+describe("with media off", () => {
+  const off = { allowMedia: false };
+  const PNG = new Uint8Array([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00,
+  ]).buffer;
+  const stubBlobs = () => {
+    const createObjectURL = vi.fn(() => "blob:fake");
+    vi.stubGlobal("URL", { createObjectURL, revokeObjectURL: vi.fn() });
+    return createObjectURL;
+  };
+
+  // No provider at all is what a failed /api/config fetch leaves behind.
+  it("renders no image when nothing says media is allowed", async () => {
+    const createObjectURL = stubBlobs();
+    vi.mocked(holeService.getBodyBytes).mockResolvedValue(served(PNG));
+    const { container } = render(
+      <RequestBody requestAddress="req001" contentType="image/png" />,
+    );
+
+    await screen.findByText(/9 bytes/);
+    expect(container.querySelector("img")).toBeNull();
+    expect(createObjectURL).not.toHaveBeenCalled();
+  });
+
+  it("describes a dropped body instead of calling it empty", async () => {
+    renderBody("image/png", {
+      ...off,
+      dropped: parseBodyDropped(
+        '{"reason":"type","bytes":48213,"contentType":"image/png"}',
+      ),
+    });
+
+    expect(
+      await screen.findByText("Media/binary data dropped: 47 KB, image/png"),
+    ).toBeVisible();
+    expect(screen.queryByText(/empty body/i)).toBeNull();
+    expect(document.querySelector("img")).toBeNull();
+  });
+
+  it("says a withheld body is not shown on this instance", async () => {
+    vi.mocked(holeService.getBodyBytes).mockResolvedValue({
+      bytes: new ArrayBuffer(0),
+      withheld: true,
+    });
+    renderBody("image/png", off);
+
+    expect(
+      await screen.findByText("Media/binary data not shown on this instance"),
+    ).toBeVisible();
+    expect(screen.queryByText(/empty body/i)).toBeNull();
+    expect(document.querySelector("img")).toBeNull();
+  });
+
+  it("renders a kept body with no content-type as text, not a hex dump", async () => {
+    vi.mocked(holeService.getBodyBytes).mockResolvedValue(
+      served(toBytes("plain words")),
+    );
+    const { container } = renderBody(undefined, off);
+
+    await screen.findByText("plain words");
+    expect(container.textContent).not.toMatch(/bytes —/);
+  });
+
+  it("keeps the hex preview for bytes it did not expect, with no download", async () => {
+    const createObjectURL = stubBlobs();
+    vi.mocked(holeService.getBodyBytes).mockResolvedValue(served(PNG));
+    renderBody("application/octet-stream", off);
+
+    await screen.findByText(/9 bytes/);
+    await settle();
+    expect(createObjectURL).not.toHaveBeenCalled();
+    expect(screen.queryByRole("link", { name: /download/i })).toBeNull();
+  });
+
+  describe("multipart", () => {
+    const form = (partHead: string, partBytes: Uint8Array) => {
+      const encode = (text: string) => new TextEncoder().encode(text);
+      const bytes = new Uint8Array([
+        ...encode(
+          '--B\r\ncontent-disposition: form-data; name="title"\r\n\r\nhello\r\n--B\r\n',
+        ),
+        ...encode(partHead),
+        ...partBytes,
+        ...encode("\r\n--B--\r\n"),
+      ]);
+      return bytes.buffer;
+    };
+    const avatarHead =
+      'content-disposition: form-data; name="avatar"; filename="me.png"\r\ncontent-type: image/png\r\n\r\n';
+
+    it("shows a dropped part's notice in that part's place", async () => {
+      vi.mocked(holeService.getBodyBytes).mockResolvedValue(
+        served(form(avatarHead, new Uint8Array())),
+      );
+      renderBody("multipart/form-data; boundary=B", {
+        ...off,
+        dropped: parseBodyDropped(
+          '{"parts":[{"index":1,"name":"avatar","filename":"me.png","contentType":"image/png","bytes":48213,"reason":"type"}]}',
+        ),
+      });
+
+      const items = await screen.findAllByRole("listitem");
+      expect(items).toHaveLength(2);
+      expect(items[0]).toHaveTextContent("hello");
+      expect(items[0]).not.toHaveTextContent(/dropped/);
+      expect(items[1]).toHaveTextContent("avatar");
+      expect(items[1]).toHaveTextContent(
+        "Media/binary data dropped: 47 KB, image/png",
+      );
+    });
+
+    it("never builds an image or blob for an image part", async () => {
+      const createObjectURL = stubBlobs();
+      vi.mocked(holeService.getBodyBytes).mockResolvedValue(
+        served(form(avatarHead, new Uint8Array(PNG))),
+      );
+      const { container } = renderBody("multipart/form-data; boundary=B", off);
+
+      await screen.findByText("avatar");
+      await settle();
+      expect(container.querySelector("img")).toBeNull();
+      expect(createObjectURL).not.toHaveBeenCalled();
+    });
   });
 });

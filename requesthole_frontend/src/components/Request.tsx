@@ -11,6 +11,7 @@ import { isAddress } from "../utils/address";
 import EmptyState from "./EmptyState";
 import MethodBadge from "./MethodBadge";
 import RequestBody from "./RequestBody";
+import { parseBodyDropped } from "../utils/bodyDropped";
 
 const RequestHeaders = ({ headers }: { headers: RequestHeadersObject }) => {
   const headerKeys = Object.keys(headers);
@@ -146,6 +147,7 @@ const Request = () => {
         <RequestBody
           requestAddress={request_address!}
           contentType={request.headersObject?.["content-type"]}
+          dropped={parseBodyDropped(request.body_dropped)}
         />
       </div>
     );

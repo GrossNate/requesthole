@@ -95,7 +95,10 @@ beforeEach(() => {
     capturedRequest({ request_address: "req002", request_path: "/other" }),
   ]);
   vi.mocked(holeService.getRequest).mockResolvedValue(capturedRequest());
-  vi.mocked(holeService.getBodyBytes).mockResolvedValue(new ArrayBuffer(0));
+  vi.mocked(holeService.getBodyBytes).mockResolvedValue({
+    bytes: new ArrayBuffer(0),
+    withheld: false,
+  });
 });
 
 describe("Hole history", () => {
