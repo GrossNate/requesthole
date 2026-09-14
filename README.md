@@ -139,11 +139,14 @@ does it as the first half of its build:
 | `MAX_HOLES`              | backend             | `1000`          | Total holes the deployment will hold. At the ceiling, creation is refused with `503` — nothing is evicted to make room.                                                         |
 | `MAX_HOLES_PER_IP`       | backend             | `20`            | Live holes one client may hold at once, IPv6 counted per /64. Beyond it, creation is refused with `429`, so filling `MAX_HOLES` takes many clients rather than one patient one. |
 | `MAX_BODY_BYTES`         | backend             | `1048576`       | Largest request body a hole will capture; anything bigger is rejected with `413`.                                                                                               |
+| `ALLOW_MEDIA`            | backend             | `false`         | Store and serve media and binary bodies. Off, RequestHole keeps text only and records what it dropped. See [Media and binary bodies](#media-and-binary-bodies).                 |
 
 The backend knobs are all optional and apply to the running container: set them
 under the `backend` service's `environment` in `compose.yml`, or pass them
-through your shell. Each must be a positive integer; the backend refuses to
-start on anything else. Rate limits key on the client address that Nginx
+through your shell. The numeric knobs must be positive integers, and
+`ALLOW_MEDIA` must be `true`, `false`, `1` or `0` in any case; the backend
+refuses to start on anything else, so a typo such as `ALLOW_MEDIA=yes` stops
+the deploy instead of guessing. Rate limits key on the client address that Nginx
 forwards in `X-Forwarded-For`, so one busy client cannot lock everyone else out.
 Nginx sends only the peer address it saw, and the backend trusts exactly that
 one hop, so a client cannot pick its own bucket by setting the header itself.
@@ -204,28 +207,95 @@ every hole is listed on the home page, and anyone who knows an address can read
 what was sent to it. The limits above bound what a stranger can consume; they
 do not add access control.
 
+### Media and binary bodies
+
+RequestHole keeps text only unless you set `ALLOW_MEDIA=true`. Anything that
+lets strangers upload images or video for free will be used to store content
+you do not want on your disk, and showing that content in the viewer is worse
+than storing it. So allowing media has to be a decision you make; it is never
+the default.
+
+**This changes earlier behaviour.** Before this setting existed, every body was
+stored as sent, image bodies were shown inline, and binary bodies got a hex
+preview and a download. Those previews now need `ALLOW_MEDIA=true`.
+
+With media off, a body is kept only if it passes every check below. The first
+failure drops it:
+
+- **Content type.** The `Content-Type` is parsed strictly. A malformed value, a
+  wildcard, a repeated header or parameter, or a UTF-7, UTF-16 or UTF-32
+  charset drops the body. A request with no `Content-Type` is treated as
+  `text/plain`.
+- **Encoding.** A compressed body (`Content-Encoding` other than `identity`, or
+  a transfer coding other than `chunked`) is dropped, never decompressed.
+- **Declared type.** `text/*`, `multipart/form-data`, and a list of text-based
+  `application/*` types pass: JSON, XML, YAML, CSV, forms, JavaScript, GraphQL,
+  JWTs and similar, plus any `+json`, `+xml`, `+yaml`, `+csv`, `+jwt`,
+  `+sd-jwt` or `+jws` type. Images, audio, video, fonts, PDFs,
+  `application/octet-stream`, and text formats that open with embedded images
+  (RTF, vCard, iCalendar, uuencode) are dropped. HTML stays allowed.
+- **Bytes.** The body must be valid UTF-8 with no control characters other than
+  tab, line feed, carriage return and form feed.
+- **File signature.** A body that starts like a PDF, PostScript, RTF, SVG, XPM,
+  XBM, Netpbm, vCard with a photo, uuencoded file or MIME message is dropped,
+  whatever type it claims.
+- **Multipart forms, part by part.** Each part gets the checks above. A
+  dropped part keeps its headers and loses its content, so the form still
+  shows every field. A part with `Content-Transfer-Encoding`, or one that is
+  itself multipart, is dropped. The stored body is rebuilt from the parts, so
+  any preamble or epilogue is discarded. A multipart body that does not parse
+  gets the whole-body byte and signature checks instead.
+
+A dropped body is stored empty, with a description of what arrived: its size,
+declared type and why it was dropped. The viewer shows that description in
+place of the body, marks the row in the request list, and never builds an image
+for anything while media is off, including when it cannot reach
+`/api/config`. The backend logs each drop as one line with the hole, the
+request, the declared type, the size and the reason, and never any content.
+
+The body endpoint serves every body as `text/plain; charset=utf-8` with
+`Cross-Origin-Resource-Policy: same-origin`, so no other site can embed it as
+an image. It also runs the checks again when it serves a body. If you turn
+media off after capturing with it on, the older binary bodies are answered
+with an empty `200` and `x-requesthole-body-withheld: true` until the
+retention sweep removes them.
+
+### Limits of ALLOW_MEDIA
+
+- **Encoded binary inside text passes.** Base64 (including `data:` URIs inside
+  JSON or HTML), percent-encoded bytes in a form body, and `\u` escapes in JSON
+  are all valid text. The viewer shows them only as text, never as an image,
+  and `MAX_BODY_BYTES` bounds their size. Lower it if that matters to you.
+- **Compressed bodies are dropped, not inspected.** A sender that gzips its
+  webhooks loses the body; the description says it was compressed.
+- **Some real text is dropped.** A text type that is not on the list, SendGrid's
+  "raw" inbound parse, and Mailgun's MIME forwarding are dropped with a
+  description. The last two carry whole emails with base64 attachments. On a
+  private instance, `ALLOW_MEDIA=true` is the way to keep them.
+
 ## Route design
 
-| UI      | route                                  | purpose                                                     |
-| :------ | :------------------------------------- | :---------------------------------------------------------- |
-| GET     | `/`                                    | main - view all holes                                       |
-| GET     | `/view/:hole_address`                  | view list of requests in a hole                             |
-| GET     | `/view/:hole_address/:request_address` | the same list, with one request's detail alongside it       |
+| UI      | route                                  | purpose                                                      |
+| :------ | :------------------------------------- | :----------------------------------------------------------- |
+| GET     | `/`                                    | main - view all holes                                        |
+| GET     | `/view/:hole_address`                  | view list of requests in a hole                              |
+| GET     | `/view/:hole_address/:request_address` | the same list, with one request's detail alongside it        |
 | &nbsp;  |                                        |
 | **API** |                                        |
-| GET     | `/api/`                                | list API reference? (not implemented)                       |
-| GET     | `/api/holes`                           | get all holes info                                          |
-| GET     | `/api/hole/:hole_address`              | get hole info                                               |
-| POST    | `/api/hole`                            | create a new hole                                           |
-| DELETE  | `/api/hole/:hole_address`              | delete a hole                                               |
-| GET     | `/api/hole/:hole_address/requests`     | get all requests for a hole; `404` once the hole is gone    |
-| GET     | `/api/hole/:hole_address/events`       | SSE stream: captures, `delete` and `hole-deleted` frames    |
-| GET     | `/api/request/:request_address`        | get specific request                                        |
-| GET     | `/api/request/:request_address/body`   | get a request's raw body                                    |
-| DELETE  | `/api/request/:request_address`        | delete specific request                                     |
+| GET     | `/api/`                                | list API reference? (not implemented)                        |
+| GET     | `/api/holes`                           | get all holes info                                           |
+| GET     | `/api/hole/:hole_address`              | get hole info                                                |
+| POST    | `/api/hole`                            | create a new hole                                            |
+| DELETE  | `/api/hole/:hole_address`              | delete a hole                                                |
+| GET     | `/api/hole/:hole_address/requests`     | get all requests for a hole; `404` once the hole is gone     |
+| GET     | `/api/hole/:hole_address/events`       | SSE stream: captures, `delete` and `hole-deleted` frames     |
+| GET     | `/api/request/:request_address`        | get specific request                                         |
+| GET     | `/api/request/:request_address/body`   | get a request's body; text only unless `ALLOW_MEDIA` is on   |
+| DELETE  | `/api/request/:request_address`        | delete specific request                                      |
+| GET     | `/api/config`                          | instance settings the viewer needs: `{ "allowMedia": bool }` |
 | &nbsp;  |                                        |
-| \*      | `/:hole_address`                       | hole endpoint to ingest HTTP requests                       |
-| \*      | `/:hole_address/*`                     | the same hole; the full sub-path is stored with the request |
+| \*      | `/:hole_address`                       | hole endpoint to ingest HTTP requests                        |
+| \*      | `/:hole_address/*`                     | the same hole; the full sub-path is stored with the request  |
 
 A malformed bare address (`/abc12`) answers `400`, as it always has. An unknown
 path with more than one segment (`/api/nope/x`) answers `404`: it reaches the
