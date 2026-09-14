@@ -25,8 +25,9 @@ export default function initSchema(db: Database.Database) {
       -- JSON describing content the media gate dropped (ALLOW_MEDIA off);
       -- NULL when nothing was.
       body_dropped TEXT,
-      -- 1 when the body was stored after passing the media gate, so reads
-      -- need not run it again; NULL for rows captured with media on.
+      -- The gate version (GATE_VERSION) that kept this body, so reads of the
+      -- current version need not run it again; NULL for rows captured with
+      -- media on. Older versions are checked again on read.
       body_checked INTEGER
     );
 

@@ -2,7 +2,7 @@ import { FastifyInstance, RouteShorthandOptions } from "fastify";
 import { JSONSchemaType } from "ajv";
 import RequestBroadcaster from "../RequestBroadcaster";
 import { Config } from "../config";
-import { filterBody, FilterHeaders } from "../body-filter";
+import { filterBody, FilterHeaders, GATE_VERSION } from "../body-filter";
 
 interface RequestParams {
   request_address: string;
@@ -110,28 +110,28 @@ function routesWrapper(
           reply.header("content-disposition", "attachment");
 
           if (!config.allowMedia) {
-            // Rows captured while media was on (or before the gate existed)
-            // stay until the retention sweep, and must not be served, so the
-            // filter runs again for them. A row the gate already checked at
-            // capture is served as stored: re-running it on every unmetered
-            // read would let one costly stored form tie up the server.
+            // Rows captured while media was on (or by an older gate) stay
+            // until the retention sweep, and must not be served unchecked, so
+            // the filter runs again for them. A row this gate version already
+            // checked at capture is served as stored: re-running it on every
+            // unmetered read would let one costly stored form tie up the
+            // server. When the filter drops nothing, its output is served —
+            // for a form that is the rebuild, whose padding and preamble are
+            // gone — and anything dropped withholds the body.
             // Every body goes out as plain text, whatever the sender claimed,
             // and CORP stops other origins embedding it as an image.
             reply.header("content-type", "text/plain; charset=utf-8");
             reply.header("cross-origin-resource-policy", "same-origin");
             const filtered =
-              body_checked === 1
+              body_checked === GATE_VERSION
                 ? { body: buffer, dropped: null }
                 : filterBody(buffer, headersObject);
-            if (
-              filtered.dropped !== null ||
-              !buffer.equals(filtered.body ?? Buffer.alloc(0))
-            ) {
+            if (filtered.dropped !== null) {
               reply.header("x-requesthole-body-withheld", "true");
               reply.send(Buffer.alloc(0));
               return;
             }
-            reply.send(buffer);
+            reply.send(filtered.body ?? Buffer.alloc(0));
             return;
           }
 

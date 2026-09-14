@@ -14,6 +14,13 @@ import { parseMultipart, type MultipartPart } from "./multipart";
  * Why content was dropped. `malformed` is a content-type that does not parse;
  * `form` is a multipart form whose body does not parse into parts.
  */
+/**
+ * The gate's version, stored in `requests.body_checked` for a body it kept.
+ * Bump it whenever the gate catches something it used to let through: rows
+ * marked by an older version are checked again when they are read.
+ */
+export const GATE_VERSION = 2;
+
 export type DropReason =
   | "type"
   | "encoding"
@@ -302,6 +309,11 @@ function lineStartsWith(text: string, marker: string): boolean {
   return false;
 }
 
+/** A line in `text` starts (after blanks) with a PostScript header. */
+function startsPostScriptLine(text: string): boolean {
+  return /(?:^\uFEFF?|[\r\n])[ \t\f]*%!(?:PS|[ \t\r\n]|$)/.test(text);
+}
+
 /**
  * Image and document formats that are pure ASCII and would pass steps 1–4
  * under text/plain. Anchored at the start (after an optional BOM and leading
@@ -316,8 +328,9 @@ const SIGNATURES: [string, (start: string, whole: string) => boolean][] = [
   // leading line must not hide them; only a line start counts, so text that
   // mentions one mid-line is kept.
   ["pdf", (_, whole) => lineStartsWith(whole.slice(0, 1024), "%PDF-")],
-  // A bare `%!` is PostScript to libmagic, shared-mime-info and printers.
-  ["postscript", (_, whole) => lineStartsWith(whole.slice(0, 1024), "%!")],
+  // `%!` then PS, whitespace or the line's end is PostScript to libmagic,
+  // shared-mime-info and printers; Go's `%!v(MISSING)` and `%!TEX` are not.
+  ["postscript", (_, whole) => startsPostScriptLine(whole.slice(0, 1024))],
   ["rtf", (start) => start.startsWith("{\\rtf")],
   ["svg", (start) => SVG_ROOT.test(afterXmlProlog(start))],
   ["xpm", (start) => start.startsWith("/* XPM */")],
@@ -338,6 +351,13 @@ const SIGNATURES: [string, (start: string, whole: string) => boolean][] = [
   ],
   // FITS: 80-column ASCII cards, the first always SIMPLE = T.
   ["fits", (start) => /^SIMPLE {2}=\s+T/.test(start)],
+  // VICAR opens with its label size (or the old NJPL1I label).
+  ["vicar", (start) => /^(?:LBLSIZE=|NJPL1I)/.test(start)],
+  // ImageMagick's text format lists every pixel after this banner.
+  [
+    "imagemagick-txt",
+    (start) => /^# ImageMagick pixel enumeration:/i.test(start),
+  ],
   [
     "vcard",
     (start, whole) =>
@@ -447,7 +467,7 @@ function filterMultipart(
     if (headerText.includes("%PDF-")) {
       return { reason: "signature", signature: "pdf" };
     }
-    if (headerText.includes("%!PS")) {
+    if (headerText.includes("%!")) {
       return { reason: "signature", signature: "postscript" };
     }
   }

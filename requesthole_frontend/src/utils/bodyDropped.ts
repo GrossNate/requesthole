@@ -108,6 +108,8 @@ const SIGNATURE_LABELS: Record<string, string> = {
   netpbm: "a Netpbm image",
   vcard: "a vCard with embedded media",
   fits: "a FITS image",
+  vicar: "a VICAR image",
+  "imagemagick-txt": "an ImageMagick text image",
   uuencode: "uuencoded data",
   mime: "a MIME message",
 };

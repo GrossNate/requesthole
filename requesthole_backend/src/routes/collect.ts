@@ -13,7 +13,7 @@ import insertWithUniqueAddress from "../utils/unique-insert";
 import RequestBroadcaster from "../RequestBroadcaster";
 import RequestSansBody from "../schemas";
 import { Config } from "../config";
-import { filterBody } from "../body-filter";
+import { filterBody, GATE_VERSION } from "../body-filter";
 
 interface HoleParams {
   hole_address: string;
@@ -173,7 +173,7 @@ function routesWrapper(
               JSON.stringify(request.headers),
               body,
               dropped === null ? null : JSON.stringify(dropped),
-              config.allowMedia ? null : 1,
+              config.allowMedia ? null : GATE_VERSION,
             );
             return address;
           },

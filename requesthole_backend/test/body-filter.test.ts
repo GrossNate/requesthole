@@ -604,7 +604,7 @@ describe("filterBody", () => {
     });
 
     // Fail closed: a form that cannot be parsed into parts is dropped whole
-    // as malformed. Whole-body checks cannot see an SVG or base64 part inside
+    // with reason `form`. Whole-body checks cannot see an SVG or base64 part inside
     // it, so falling back to them would let those through.
     it.each([
       ["no boundary parameter", "multipart/form-data"],
@@ -676,6 +676,18 @@ describe("filterBody", () => {
       const body = text(`--XyZ\r\n${block}\r\n\r\nv\r\n--XyZ--\r\n`);
       expect(filterBody(body, form).dropped).toMatchObject({
         reason: "form",
+      });
+    });
+
+    // `%` and `!` are token characters, so `%!` can be a part header's field
+    // name, which puts it at a line start in the stored body.
+    it("drops a form whose part header line starts with %!", () => {
+      const body = text(
+        '--XyZ\r\n%!: 100 100 translate\r\nContent-Disposition: form-data; name="x"\r\n\r\nhi\r\n--XyZ--\r\n',
+      );
+      expect(filterBody(body, form).dropped).toMatchObject({
+        reason: "signature",
+        signature: "postscript",
       });
     });
 
@@ -888,6 +900,8 @@ describe("filterBody", () => {
       ["the width right after the magic", "P596 120\n126\n~~"],
       ["a PFM float map", "Pf\n96 120\n-1.0\nAAA?"],
       ["a colour PFM", "PF\n2 1\n1.0\nAAA?"],
+      ["a half-float map", "PH\n2 1\n-1.0\nAAA?"],
+      ["a grey half-float map", "Ph\n2 1\n-1.0\nAA"],
     ])("drops a Netpbm image with %s", (_, value) => {
       expect(signatureOf(value)).toBe("netpbm");
     });
@@ -912,6 +926,30 @@ describe("filterBody", () => {
         "postscript",
       );
       expect(signatureOf("junk\n%!\nshowpage\n")).toBe("postscript");
+      expect(signatureOf("%! 100 100 translate\n")).toBe("postscript");
+      expect(signatureOf("%!PS-Adobe-3.0\n")).toBe("postscript");
+    });
+
+    // Only `%!` then PS, whitespace or the line's end is PostScript (libmagic's
+    // rule). Go's fmt prints `%!v(MISSING)` for a bad verb, and TeX sources
+    // open with `%!TEX` directives.
+    it.each([
+      ["a Go bad-verb log line", "hello\n%!d(string=x) failed\n"],
+      ["a Go missing-argument line", "%!v(MISSING) at startup\n"],
+      ["a TeX directive", "%!TEX root = main.tex\n\\documentclass{article}\n"],
+    ])("keeps %s", (_, value) => {
+      expect(signatureOf(value)).toBeUndefined();
+    });
+
+    it.each([
+      ["vicar", "LBLSIZE=256 FORMAT='BYTE' TYPE='IMAGE' NL=16 NS=16\n"],
+      ["vicar", "NJPL1I00PJ   VICAR header\n"],
+      [
+        "imagemagick-txt",
+        "# ImageMagick pixel enumeration: 4,4,255,srgb\n0,0: (255,0,0) #FF0000 red\n",
+      ],
+    ])("drops a %s image", (signature, value) => {
+      expect(signatureOf(value)).toBe(signature);
     });
 
     it("drops an SVG whose root has a non-ASCII namespace prefix", () => {

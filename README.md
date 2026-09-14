@@ -237,11 +237,13 @@ failure drops it:
   (RTF, vCard, iCalendar, uuencode) are dropped. HTML stays allowed.
 - **Bytes.** The body must be valid UTF-8 with no control characters other than
   tab, line feed, carriage return and form feed.
-- **File signature.** A body that starts like an RTF, SVG, XPM, XBM, Netpbm or
-  PFM (P1 to P7, PF), FITS, vCard with a photo, logo or sound, or uuencoded
-  file is dropped, whatever type it claims. A PDF header (`%PDF-`) or PostScript
-  header (`%!`) counts at the start of any line in the first 1024 bytes, since
-  readers look that far; text that mentions one mid-line is kept. A raw email
+- **File signature.** A body that starts like an RTF, SVG, XPM, XBM, Netpbm,
+  PFM or half-float map (P1 to P7, PF/Pf, PH/Ph), FITS, VICAR, ImageMagick
+  text image, vCard with a photo, logo or sound, or uuencoded file is dropped,
+  whatever type it claims. A PDF header (`%PDF-`) or PostScript header (`%!`
+  followed by `PS`, a space or the line's end) counts at the start of any line
+  in the first 1024 bytes, since readers look that far; text that mentions one
+  mid-line is kept, and so are Go's `%!v(MISSING)` and TeX's `%!TEX` lines. A raw email
   counts when `MIME-Version:` appears anywhere in its opening header block.
   The SVG check skips the whole XML prolog (declaration, comments, doctype)
   however long it is, and accepts a namespace-prefixed root. A fixed limit
@@ -252,7 +254,8 @@ failure drops it:
   itself multipart, is dropped. The stored body is rebuilt from the parts, so
   any preamble or epilogue is discarded. Header blocks are stored as sent, so
   every line in them must be a `name: value` header that passes the byte check,
-  and a PDF or PostScript header anywhere in one drops the form.
+  and a PDF (`%PDF-`) or PostScript (`%!`) marker anywhere in one drops the
+  form.
 - **Forms that do not parse are dropped.** A `multipart/form-data` body with no
   boundary, a boundary that breaks RFC 2046 (over 70 characters, or characters
   outside its set), a region that is not a part, a malformed part header, or
@@ -272,11 +275,13 @@ request, the declared type, the size and the reason, and never any content.
 With media off, the body endpoint serves every body as
 `text/plain; charset=utf-8` with
 `Cross-Origin-Resource-Policy: same-origin`, so no other site can embed it as
-an image. A body captured with media off is marked as checked and served as
-stored. Anything else is checked again as it is served, so if you turn media
-off after capturing with it on, the older binary bodies are answered with an
-empty `200` and `x-requesthole-body-withheld: true` until the retention sweep
-removes them.
+an image. A body captured with media off is marked with the version of the
+checks that kept it and served as stored. Anything else, including a body kept
+by an older version of the checks, is checked again as it is served. A form
+that passes is served as rebuilt, without its preamble or padding. So if you
+turn media off after capturing with it on, the older binary bodies are
+answered with an empty `200` and `x-requesthole-body-withheld: true` until the
+retention sweep removes them.
 
 ### Limits of ALLOW_MEDIA
 

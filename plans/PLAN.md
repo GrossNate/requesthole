@@ -79,12 +79,14 @@ Durable decisions that apply across all tasks.
   encodings, declared-type allowlist behind a top-level gate, strict-UTF-8 byte check, anchored
   file-signature check (PDF `%PDF-`/PostScript `%!` at any line start in the first 1 KB, SVG past any
   prolog, MIME-Version anywhere in a raw email's header block),
-  multipart part by part with any unparseable form — no boundary or one outside RFC 2046's 70 bchars,
+  multipart part by part with any unparseable form — no boundary, a boundary over 70 characters or
+  outside RFC 2046's bchars,
   skipped region, malformed part header, no close delimiter — dropped whole with reason `form` — drops
   disallowed content before
   storage and records a JSON description in the nullable `requests.body_dropped` column, carried in
-  all request metadata. Rows captured with media off are marked `body_checked = 1` and served as stored;
-  the body endpoint re-runs the filter at read time for any other row (empty 200 +
+  all request metadata. Rows captured with media off store the gate version (`GATE_VERSION`) in
+  `body_checked` and are served as stored; the body endpoint re-runs the filter at read time for any
+  other row, serving the filter's output (a rebuilt form) when nothing is dropped (empty 200 +
   `x-requesthole-body-withheld`) and serves kept bodies as `text/plain; charset=utf-8` with CORP
   `same-origin`. `GET /api/config` returns `{ allowMedia }`; the viewer treats a failed fetch as media
   off (a 5 s timeout counts as failure), renders no body until it answers, and never builds an

@@ -107,7 +107,7 @@ failure drops it.
 - New nullable `requests.body_dropped` TEXT column holding JSON, added with an idempotent
   `ALTER TABLE` on older databases (the pattern `holes.creator_ip` uses). `null` means nothing was
   dropped. Shapes:
-  - whole body: `{"reason": "type"|"encoding"|"bytes"|"signature"|"malformed", "bytes": 48213,
+  - whole body: `{"reason": "type"|"encoding"|"bytes"|"signature"|"malformed"|"form", "bytes": 48213,
     "contentType": "image/png" | null, "contentEncoding"?: "gzip", "signature"?: "svg"}`
   - multipart: `{"parts": [{"index": 2, "name": "avatar", "filename": "me.png",
     "contentType": "image/png", "bytes": 48213, "reason": "type", "signature"?: "..."}]}`
@@ -207,7 +207,8 @@ dropped with a description; `ALLOW_MEDIA` on a private instance is the escape ha
 
 ## Decisions made during implementation
 
-- **Unparseable multipart is dropped whole as `malformed`** (user, review round 2). This replaces the
+- **Unparseable multipart is dropped whole** (user, review round 2; recorded as `malformed` then,
+  given its own reason `form` in round 3 — see below). This replaces the
   spec's "whole-body steps 4–5 instead": those checks cannot see an SVG or `Content-Transfer-Encoding`
   part inside a form. It covers no boundary, a boundary over RFC 2046's 70 characters (which also
   bounds the delimiter search), a skipped region, a part header block that is not text or has a line
@@ -248,13 +249,20 @@ dropped with a description; `ALLOW_MEDIA` on a private instance is the escape ha
   space-after-P7 forms, PFM/half-float maps, FITS, folded vCard properties, a raw email whose
   MIME-Version is anywhere in its opening header block, and non-ASCII SVG root prefixes.
 
+- **Round 4**: the read side serves the filter's output when it drops nothing, so a text-only form
+  captured with media on is served rebuilt (preamble and padding gone) instead of withheld;
+  `body_checked` stores `GATE_VERSION` (now 2) so a gate fix re-checks rows an older gate kept;
+  PostScript means `%!` then `PS`, whitespace or line end (Go's `%!v(MISSING)` and `%!TEX` kept),
+  while any `%!` in a part header drops the form; VICAR and ImageMagick text images added.
+
 ## What was built
 
 - Backend: `src/config.ts` (`allowMedia`), `src/media-type.ts` (strict RFC 9110 parser, ported
   lenient parameter parser), `src/multipart.ts` (ported parser), `src/body-filter.ts` (the gate),
   `src/routes/collect.ts` (filter at capture from raw headers, drop log line),
-  `src/routes/request.ts` (read-side re-filter, inert text/plain + CORP serving, withheld header),
-  `src/routes/config.ts` (`GET /api/config`), `src/db-init.ts` (`body_dropped` + migration),
+  `src/routes/request.ts` (read-side re-filter for rows not checked by the current gate version,
+  inert text/plain + CORP serving, withheld header),
+  `src/routes/config.ts` (`GET /api/config`), `src/db-init.ts` (`body_dropped` + `body_checked` columns and migrations),
   `src/schemas.ts`, `src/routes/hole.ts`, `src/app.ts` (CORS exposure, startup line, logger option).
 - Frontend: `src/services.ts` (`getConfig`, withheld flag), `src/mediaConfigContext.ts`,
   `src/MediaConfigProvider.tsx`, `src/utils/bodyDropped.ts`, `src/utils/mediaType.ts` (top-level
@@ -270,5 +278,5 @@ dropped with a description; `ALLOW_MEDIA` on a private instance is the escape ha
   after switching off. Review round 1 (18 findings incl. a ReDoS blocker) all fixed; round 2
   (12 findings incl. an O(n·m) long-boundary search and an unclosed-multipart bypass) all fixed
   with the two user decisions above. Round 3 (17 minor/nit findings, no blockers or majors) all
-  fixed.
+  fixed. Round 4 (11 minor/nit findings) all fixed.
 

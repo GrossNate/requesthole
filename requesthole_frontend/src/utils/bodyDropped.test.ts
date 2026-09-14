@@ -122,6 +122,16 @@ describe("describeDrop", () => {
     );
   });
 
+  it.each([
+    ["vicar", "a VICAR image"],
+    ["imagemagick-txt", "an ImageMagick text image"],
+  ])("names a %s signature", (signature, label) => {
+    const dropped = whole({ reason: "signature", signature });
+    expect(dropped.kind === "whole" && describeDrop(dropped)).toContain(
+      `looks like ${label}`,
+    );
+  });
+
   it("names a FITS image", () => {
     const dropped = whole({ reason: "signature", signature: "fits" });
     expect(dropped.kind === "whole" && describeDrop(dropped)).toContain(

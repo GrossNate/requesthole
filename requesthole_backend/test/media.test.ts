@@ -414,33 +414,40 @@ describe("media gate", () => {
 
     // Rows captured while media was on stay until the retention sweep; the
     // filter runs again at read time so they are never served.
+    const captureWithMediaOn = async (body: Buffer, contentType: string) => {
+      const databasePath = join(
+        mkdtempSync(join(tmpdir(), "requesthole-test-")),
+        "requesthole.db",
+      );
+      const before = await start({
+        databasePath,
+        config: { allowMedia: true },
+      });
+      const hole = await createHole(before);
+      const address = await send(before, hole, body, {
+        "content-type": contentType,
+      });
+      await before.close();
+      return { after: await start({ databasePath }), address };
+    };
+
     it.each([
       ["a binary body", PNG, "image/png"],
       [
-        "a body the filter would rebuild",
-        Buffer.from(
-          'preamble\r\n--B\r\nContent-Disposition: form-data; name="a"\r\n\r\nv\r\n--B--\r\n',
-        ),
+        "a form with an image part",
+        Buffer.concat([
+          Buffer.from(
+            '--B\r\nContent-Disposition: form-data; name="f"\r\nContent-Type: image/png\r\n\r\n',
+          ),
+          PNG,
+          Buffer.from("\r\n--B--\r\n"),
+        ]),
         "multipart/form-data; boundary=B",
       ],
     ])(
       "withholds %s captured while media was on",
       async (_, body, contentType) => {
-        const databasePath = join(
-          mkdtempSync(join(tmpdir(), "requesthole-test-")),
-          "requesthole.db",
-        );
-        const before = await start({
-          databasePath,
-          config: { allowMedia: true },
-        });
-        const hole = await createHole(before);
-        const address = await send(before, hole, body, {
-          "content-type": contentType,
-        });
-        await before.close();
-
-        const after = await start({ databasePath });
+        const { after, address } = await captureWithMediaOn(body, contentType);
         const served = await fetchBody(after, address);
         expect(served.statusCode).toBe(200);
         expect(served.rawPayload).toHaveLength(0);
@@ -450,6 +457,42 @@ describe("media gate", () => {
         );
       },
     );
+
+    // A text-only form stored as sent (preamble, padding, no final CRLF) is
+    // safe once rebuilt, so the rebuild is what is served — withholding it
+    // would call a plain-text form media.
+    it("serves the rebuilt text of a form captured while media was on", async () => {
+      const { after, address } = await captureWithMediaOn(
+        Buffer.from(
+          'preamble\r\n--B  \r\nContent-Disposition: form-data; name="a"\r\n\r\nv\r\n--B--',
+        ),
+        "multipart/form-data; boundary=B",
+      );
+      const served = await fetchBody(after, address);
+      expect(served.headers["x-requesthole-body-withheld"]).toBeUndefined();
+      expect(served.body).toBe(
+        '--B\r\nContent-Disposition: form-data; name="a"\r\n\r\nv\r\n--B--\r\n',
+      );
+    });
+
+    // A later gate may catch what an earlier one let through, so a row marked
+    // by an older gate version is checked again when it is read.
+    it("re-checks a body an older gate version marked as checked", async () => {
+      const app = await start();
+      const hole = await createHole(app);
+      const address = await send(app, hole, "checked text", {
+        "content-type": "text/plain",
+      });
+      app.db
+        .prepare(
+          "UPDATE requests SET body = ?, body_checked = 1 WHERE request_address = ?",
+        )
+        .run(Buffer.from("<svg/>"), address);
+
+      const served = await fetchBody(app, address);
+      expect(served.headers["x-requesthole-body-withheld"]).toBe("true");
+      expect(served.rawPayload).toHaveLength(0);
+    });
 
     // The gate already ran at capture; re-running it on every unmetered read
     // would let one stored, costly form tie up the server. The stored body is
