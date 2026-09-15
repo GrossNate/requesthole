@@ -108,7 +108,45 @@ export type BodyFamily =
   | "image"
   | "binary";
 
-const NDJSON_SUBTYPES = new Set(["ndjson", "x-ndjson", "jsonl", "x-jsonlines"]);
+const NDJSON_SUBTYPES = new Set([
+  "ndjson",
+  "x-ndjson",
+  "jsonl",
+  "jsonlines",
+  "x-jsonlines",
+]);
+/** JSON under a name that says otherwise (AWS SDKs, CSP violation reports). */
+const JSON_SUBTYPES = new Set([
+  "json",
+  "x-json",
+  "x-amz-json-1.0",
+  "x-amz-json-1.1",
+  "csp-report",
+]);
+const XML_SUBTYPES = new Set(["xml", "xml-dtd", "xml-external-parsed-entity"]);
+/**
+ * The rest of the backend's `application/*` text allowlist (the body filter's
+ * ALLOWED_APPLICATION_SUBTYPES and ALLOWED_SUFFIXES): text with no richer
+ * rendering here. Without them a stored body would render as a hex glimpse.
+ */
+const TEXT_APPLICATION_SUBTYPES = new Set([
+  "graphql",
+  "sql",
+  "toml",
+  "x-toml",
+  "csv",
+  "jwt",
+  "jose",
+  "x-sh",
+  "x-shellscript",
+  "jsonpath",
+  "sparql-query",
+  "sparql-update",
+  "n-triples",
+  "n-quads",
+  "trig",
+]);
+const TEXT_SUFFIXES = new Set(["csv", "jwt", "sd-jwt", "jws"]);
 const YAML_SUBTYPES = new Set(["yaml", "x-yaml"]);
 const JAVASCRIPT_SUBTYPES = new Set([
   "javascript",
@@ -128,15 +166,21 @@ export function classifyBody(media: MediaType | undefined): BodyFamily {
   const { type, subtype, suffix } = media;
 
   if (type === "image") return "image";
+  if (type === "multipart")
+    return subtype === "form-data" ? "multipart" : "binary";
+  // The backend's top-level gate: suffix and subtype rules apply only under
+  // the types that can carry text, so `video/lottie+json` is not JSON.
+  if (type !== "application" && type !== "text") return "binary";
   if (type === "application" && subtype === "x-www-form-urlencoded")
     return "form";
-  if (type === "multipart" && subtype === "form-data") return "multipart";
   if (NDJSON_SUBTYPES.has(subtype)) return "ndjson";
-  if (subtype === "json" || suffix === "json") return "json";
-  if (subtype === "xml" || suffix === "xml") return "xml";
+  if (JSON_SUBTYPES.has(subtype) || suffix === "json") return "json";
+  if (XML_SUBTYPES.has(subtype) || suffix === "xml") return "xml";
   if (YAML_SUBTYPES.has(subtype) || suffix === "yaml") return "yaml";
   if (JAVASCRIPT_SUBTYPES.has(subtype)) return "javascript";
   if (subtype === "html") return "html";
   if (type === "text") return "text";
+  if (TEXT_APPLICATION_SUBTYPES.has(subtype)) return "text";
+  if (suffix !== undefined && TEXT_SUFFIXES.has(suffix)) return "text";
   return "binary";
 }

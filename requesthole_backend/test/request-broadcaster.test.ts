@@ -23,6 +23,7 @@ const captured = (
   request_path: "/aaaaaa",
   query_params: '{"probe":"1"}',
   headers: '{"user-agent":"curl/8.7.1"}',
+  body_dropped: null,
   ...overrides,
 });
 

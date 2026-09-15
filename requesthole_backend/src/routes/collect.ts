@@ -13,6 +13,7 @@ import insertWithUniqueAddress from "../utils/unique-insert";
 import RequestBroadcaster from "../RequestBroadcaster";
 import RequestSansBody from "../schemas";
 import { Config } from "../config";
+import { filterBody, GATE_VERSION } from "../body-filter";
 
 interface HoleParams {
   hole_address: string;
@@ -45,6 +46,16 @@ const hasDotSegment = (url: string) =>
     .split("/")
     .some((segment) => segment === "." || segment === "..");
 
+// Every value of every header, names lowercased. Node's parsed headers keep
+// only the first of a repeated Content-Type, so the raw list is the source.
+const headersAsSent = (rawHeaders: string[]) => {
+  const headers: Record<string, string[]> = {};
+  for (let i = 0; i + 1 < rawHeaders.length; i += 2) {
+    (headers[rawHeaders[i]!.toLowerCase()] ??= []).push(rawHeaders[i + 1]!);
+  }
+  return headers;
+};
+
 const params: JSONSchemaType<HoleParams> = {
   type: "object",
   properties: {
@@ -55,7 +66,10 @@ const params: JSONSchemaType<HoleParams> = {
 
 function routesWrapper(
   requestBroadcaster: RequestBroadcaster,
-  config: Pick<Config, "maxRequestsPerHole" | "captureRateLimit">,
+  config: Pick<
+    Config,
+    "maxRequestsPerHole" | "captureRateLimit" | "allowMedia"
+  >,
 ) {
   return function routes(
     fastify: FastifyInstance,
@@ -79,8 +93,8 @@ function routesWrapper(
       `
         INSERT INTO requests
           (hole_id, request_address, method, request_path, query_params,
-            headers, body)
-        VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            headers, body, body_dropped, body_checked)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     // Trims the hole back to its cap right after every capture, in the same
     // transaction as the insert, so the table is bounded continuously rather
@@ -117,7 +131,8 @@ function routesWrapper(
           method,
           request_path,
           query_params,
-          headers
+          headers,
+          body_dropped
         FROM requests
         WHERE request_address = ?
       `,
@@ -137,6 +152,13 @@ function routesWrapper(
       if (!hole) {
         reply.code(404);
       } else {
+        const received = (request.body as Buffer | undefined) ?? null;
+        // Media off, the filter decides what is stored. It reads the headers
+        // as sent: Node keeps only the first of a repeated Content-Type, and
+        // a repeat is itself grounds to drop.
+        const { body, dropped } = config.allowMedia
+          ? { body: received, dropped: null }
+          : filterBody(received, headersAsSent(request.raw.rawHeaders));
         let evicted: string[] = [];
         const newRequestAddress = insertWithUniqueAddress(
           generateAddress,
@@ -149,11 +171,30 @@ function routesWrapper(
               request.url,
               JSON.stringify(request.query),
               JSON.stringify(request.headers),
-              (request.body as Buffer | undefined) ?? null,
+              body,
+              dropped === null ? null : JSON.stringify(dropped),
+              config.allowMedia ? null : GATE_VERSION,
             );
             return address;
           },
         );
+        if (dropped !== null) {
+          // Enough for an operator to spot file-hosting attempts; never any
+          // content, and names and filenames stay out of the log.
+          fastify.log.info(
+            {
+              hole: hole_address,
+              request: newRequestAddress,
+              contentType: request.headers["content-type"] ?? null,
+              bytes: received?.length ?? 0,
+              reason:
+                "reason" in dropped
+                  ? dropped.reason
+                  : dropped.parts.map((part) => part.reason).join(","),
+            },
+            "dropped body",
+          );
+        }
         const row = selectCapturedRequest.get(newRequestAddress);
         const parseResult = RequestSansBody.safeParse(row);
         if (!parseResult.success) {

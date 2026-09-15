@@ -1,6 +1,8 @@
 import { FastifyInstance, RouteShorthandOptions } from "fastify";
 import { JSONSchemaType } from "ajv";
 import RequestBroadcaster from "../RequestBroadcaster";
+import { Config } from "../config";
+import { filterBody, FilterHeaders, GATE_VERSION } from "../body-filter";
 
 interface RequestParams {
   request_address: string;
@@ -14,7 +16,10 @@ const params: JSONSchemaType<RequestParams> = {
   required: ["request_address"],
 };
 
-function routesWrapper(requestBroadcaster: RequestBroadcaster) {
+function routesWrapper(
+  requestBroadcaster: RequestBroadcaster,
+  config: Pick<Config, "allowMedia">,
+) {
   return function routes(
     fastify: FastifyInstance,
     options: RouteShorthandOptions,
@@ -35,13 +40,15 @@ function routesWrapper(requestBroadcaster: RequestBroadcaster) {
         method,
         request_path,
         query_params,
-        headers
+        headers,
+        body_dropped
       FROM requests
       WHERE request_address = ?
     `,
     );
     const selectRequestBody = fastify.db.prepare(
-      `SELECT headers, body FROM requests WHERE request_address = ?`,
+      `SELECT headers, body, body_checked FROM requests
+       WHERE request_address = ?`,
     );
 
     fastify.delete<{ Params: RequestParams }>(
@@ -83,9 +90,10 @@ function routesWrapper(requestBroadcaster: RequestBroadcaster) {
         if (row === undefined) {
           reply.code(404);
         } else {
-          const { body, headers } = row as {
+          const { body, headers, body_checked } = row as {
             body: Buffer | string | null;
             headers: string;
+            body_checked: number | null;
           };
           const buffer =
             body === null
@@ -93,22 +101,49 @@ function routesWrapper(requestBroadcaster: RequestBroadcaster) {
               : body instanceof Buffer
                 ? body
                 : Buffer.from(body);
-          const headersObject = JSON.parse(headers) as Partial<{
-            "content-type": string;
-          }>;
-          // Serve captured bodies inertly. The stored content is untrusted, so a
-          // stored `<script>` must never execute on this origin: `nosniff` stops
-          // the browser inferring an executable type, and `attachment` makes
-          // direct navigation download rather than render. The viewer still shows
-          // images inline because `<img>` sub-resource loads ignore both headers;
-          // the PDF link, which opened a tab, now downloads instead — the safe
-          // trade for not rendering attacker-controlled documents same-origin.
-          reply.header(
-            "content-type",
-            headersObject["content-type"] ?? "application/octet-stream",
-          );
+          const headersObject = JSON.parse(headers) as FilterHeaders;
+          // Serve captured bodies inertly. The stored content is untrusted, so
+          // a stored `<script>` must never execute on this origin: `nosniff`
+          // stops the browser inferring an executable type, and `attachment`
+          // makes direct navigation download rather than render.
           reply.header("x-content-type-options", "nosniff");
           reply.header("content-disposition", "attachment");
+
+          if (!config.allowMedia) {
+            // Rows captured while media was on (or by an older gate) stay
+            // until the retention sweep, and must not be served unchecked, so
+            // the filter runs again for them. A row this gate version already
+            // checked at capture is served as stored: re-running it on every
+            // unmetered read would let one costly stored form tie up the
+            // server. When the filter drops nothing, its output is served —
+            // for a form that is the rebuild, whose padding and preamble are
+            // gone — and anything dropped withholds the body.
+            // Every body goes out as plain text, whatever the sender claimed,
+            // and CORP stops other origins embedding it as an image.
+            reply.header("content-type", "text/plain; charset=utf-8");
+            reply.header("cross-origin-resource-policy", "same-origin");
+            const filtered =
+              body_checked === GATE_VERSION
+                ? { body: buffer, dropped: null }
+                : filterBody(buffer, headersObject);
+            if (filtered.dropped !== null) {
+              reply.header("x-requesthole-body-withheld", "true");
+              reply.send(Buffer.alloc(0));
+              return;
+            }
+            reply.send(filtered.body ?? Buffer.alloc(0));
+            return;
+          }
+
+          // Media on, the sender's type is kept so the viewer can show images
+          // inline: `<img>` sub-resource loads ignore both headers above.
+          const contentType = headersObject["content-type"];
+          reply.header(
+            "content-type",
+            typeof contentType === "string"
+              ? contentType
+              : "application/octet-stream",
+          );
           reply.send(buffer);
         }
       },

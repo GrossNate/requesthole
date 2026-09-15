@@ -7,6 +7,8 @@ const RequestSansBody = z.object({
   request_path: z.string(),
   query_params: z.string(),
   headers: z.string(),
+  /** JSON describing content the media gate dropped, or null. */
+  body_dropped: z.string().nullable(),
 });
 
 type RequestSansBody = z.infer<typeof RequestSansBody>;

@@ -26,8 +26,19 @@ export interface RequestObject {
   query_params: string;
   /** JSON text of the captured headers. */
   headers: string;
+  /**
+   * JSON text describing content the media gate dropped (see
+   * `utils/bodyDropped.ts`), or null when nothing was. Optional because a
+   * backend from before the gate never sends it.
+   */
+  body_dropped?: string | null;
   /** Client-side only: `headers` parsed. Never present on the wire. */
   headersObject?: RequestHeadersObject;
 }
 
 export type RequestHeadersObject = { [key: string]: string };
+
+/** What `GET /api/config` reports; media off unless it says otherwise. */
+export interface InstanceConfig {
+  allowMedia: boolean;
+}

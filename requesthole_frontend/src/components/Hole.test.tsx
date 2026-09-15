@@ -119,7 +119,10 @@ beforeEach(() => {
   lastEventSource = null;
   vi.mocked(holeService.getRequests).mockResolvedValue([]);
   vi.mocked(holeService.getRequest).mockResolvedValue(capturedRequest());
-  vi.mocked(holeService.getBodyBytes).mockResolvedValue(new ArrayBuffer(0));
+  vi.mocked(holeService.getBodyBytes).mockResolvedValue({
+    bytes: new ArrayBuffer(0),
+    withheld: false,
+  });
 });
 
 // Restored here rather than at the end of each test body: a failing assertion
@@ -212,6 +215,48 @@ describe("Hole request list", () => {
     renderHole();
 
     expect(await screen.findByText("—")).toBeVisible();
+  });
+});
+
+describe("Hole request list, media gate", () => {
+  it("marks a row whose body was dropped, naming the size and type", async () => {
+    vi.mocked(holeService.getRequests).mockResolvedValue([
+      capturedRequest({
+        body_dropped:
+          '{"reason":"type","bytes":48213,"contentType":"image/png"}',
+      }),
+      capturedRequest({ request_address: "req002", body_dropped: null }),
+    ]);
+    renderHole();
+
+    const marker = await screen.findByRole("img", {
+      name: "Media/binary data dropped: 47 KB, image/png",
+    });
+    const rows = screen.getAllByRole("row").slice(1);
+    expect(rows).toHaveLength(2);
+    expect(rows.find((row) => row.contains(marker))).toBeDefined();
+    expect(screen.getAllByRole("img", { name: /dropped/ })).toHaveLength(1);
+  });
+
+  it("marks a streamed capture the same way", async () => {
+    renderHole();
+    await waitFor(() => expect(lastEventSource).not.toBeNull());
+    act(() => {
+      lastEventSource!.onmessage!({
+        data: JSON.stringify(
+          capturedRequest({
+            body_dropped:
+              '{"parts":[{"index":1,"name":"a","filename":null,"contentType":"image/png","bytes":2048,"reason":"type"}]}',
+          }),
+        ),
+      } as MessageEvent);
+    });
+
+    expect(
+      await screen.findByRole("img", {
+        name: "Media/binary data dropped from 1 part: 2 KB, image/png",
+      }),
+    ).toBeInTheDocument();
   });
 });
 

@@ -107,7 +107,7 @@ failure drops it.
 - New nullable `requests.body_dropped` TEXT column holding JSON, added with an idempotent
   `ALTER TABLE` on older databases (the pattern `holes.creator_ip` uses). `null` means nothing was
   dropped. Shapes:
-  - whole body: `{"reason": "type"|"encoding"|"bytes"|"signature"|"malformed", "bytes": 48213,
+  - whole body: `{"reason": "type"|"encoding"|"bytes"|"signature"|"malformed"|"form", "bytes": 48213,
     "contentType": "image/png" | null, "contentEncoding"?: "gzip", "signature"?: "svg"}`
   - multipart: `{"parts": [{"index": 2, "name": "avatar", "filename": "me.png",
     "contentType": "image/png", "bytes": 48213, "reason": "type", "signature"?: "..."}]}`
@@ -154,53 +154,129 @@ dropped with a description; `ALLOW_MEDIA` on a private instance is the escape ha
 
 ## AFK tasks
 
-- [ ] Test first: config parsing for `ALLOW_MEDIA` — unset is false; the four accepted spellings in
+- [x] Test first: config parsing for `ALLOW_MEDIA` — unset is false; the four accepted spellings in
       any case; `yes`/`on`/empty throw; the override is honoured and validated.
-- [ ] Test first: the body filter as a pure function — one case per drop rule (malformed and
+- [x] Test first: the body filter as a pure function — one case per drop rule (malformed and
       wildcard types, duplicate `Content-Type`, duplicate parameter, each banned charset, each
       encoding case, each top-level type, each `text/*` exclusion, the `+xml` exclusions,
       representative allowlist hits including suffix types, `NUL`/control bytes/invalid UTF-8/BOM/
       empty body, every signature including the leading-whitespace and `<?xml … <svg` forms) and the
       description each produces.
-- [ ] Port the multipart parser with its tests; test first the part-level rules: fail-closed on
+- [x] Port the multipart parser with its tests; test first the part-level rules: fail-closed on
       unparseable bodies, part-level drops keep headers, `Content-Transfer-Encoding` and nested
       multipart drop, preamble/epilogue discarded, rebuilt body re-parses to the same kept parts.
-- [ ] Add `requests.body_dropped` with the idempotent migration; wire the filter into the capture
+- [x] Add `requests.body_dropped` with the idempotent migration; wire the filter into the capture
       transaction; include `body_dropped` in the SSE frame, the request list, and the single-request
       fetch; add the drop log line.
-- [ ] Read side: withheld header on bodies the filter would change or drop; `text/plain` + CORP
+- [x] Read side: withheld header on bodies the filter would change or drop; `text/plain` + CORP
       serving with media off; `x-requesthole-body-withheld` exposed through CORS; `GET /api/config`.
-- [ ] Make the two existing binary round-trip tests (the octet-stream round-trip and the
+- [x] Make the two existing binary round-trip tests (the octet-stream round-trip and the
       content-type preservation test) opt in with `allowMedia: true`, and add counterparts asserting
       the default drops and withholds.
-- [ ] Viewer: config fetch with fail-closed default; no `<img>`/blob with media off; dropped-body and
+- [x] Viewer: config fetch with fail-closed default; no `<img>`/blob with media off; dropped-body and
       dropped-part notices; withheld notice; list marker with accessible name; untyped bodies as
       text with media off; `classifyBody` top-level gate — each with component tests.
-- [ ] Run the viewer in the in-app browser against the dev stack, media off and on: capture a PNG, an
+- [x] Run the viewer in the in-app browser against the dev stack, media off and on: capture a PNG, an
       SVG as `text/plain`, a gzip JSON, a mixed multipart form, and a plain JSON webhook; confirm the
       notices, the marker, and that no image renders with media off. Keyboard and screen-reader
       semantics of the new notices and marker checked in the accessibility tree.
-- [ ] README: Configuration table row for `ALLOW_MEDIA`, a note that the default changed (image and
+- [x] README: Configuration table row for `ALLOW_MEDIA`, a note that the default changed (image and
       hex previews are now opt-in), and a "Limits of ALLOW_MEDIA" subsection with the documented
       limits above. Commented `# ALLOW_MEDIA: "false"` in `compose.yml`'s knob block.
 ## Acceptance criteria
 
-- [ ] With `ALLOW_MEDIA` unset, a PNG, a gzip body, an `application/pdf`, an SVG sent as
+- [x] With `ALLOW_MEDIA` unset, a PNG, a gzip body, an `application/pdf`, an SVG sent as
       `text/plain`, and an XBM sent as `text/plain` are each stored with an empty body and a
       `body_dropped` description; a JSON, form, `text/plain`, and HTML webhook is stored unchanged.
-- [ ] A multipart form with text fields and an image file stores the text fields, keeps the file
+- [x] A multipart form with text fields and an image file stores the text fields, keeps the file
       part's headers with no content, records the part in `body_dropped.parts`, and has no preamble
       or epilogue; an unparseable multipart body containing binary is dropped whole.
-- [ ] With media off, the body endpoint serves kept bodies as `text/plain; charset=utf-8` with
+- [x] With media off, the body endpoint serves kept bodies as `text/plain; charset=utf-8` with
       `nosniff`, `attachment`, and `Cross-Origin-Resource-Policy: same-origin`, and answers a
       pre-existing binary body with an empty 200 and `x-requesthole-body-withheld: true`.
-- [ ] `ALLOW_MEDIA=yes` refuses to start; `ALLOW_MEDIA=true` restores today's behaviour exactly, and
+- [x] `ALLOW_MEDIA=yes` refuses to start; `ALLOW_MEDIA=true` restores today's behaviour exactly, and
       logs the startup line.
-- [ ] `body_dropped` arrives in SSE frames, the request list, and the single-request fetch; each drop
+- [x] `body_dropped` arrives in SSE frames, the request list, and the single-request fetch; each drop
       writes one log line containing no body content.
-- [ ] The viewer never renders an image with media off or when `/api/config` fails, shows the
+- [x] The viewer never renders an image with media off or when `/api/config` fails, shows the
       dropped, dropped-part, and withheld notices, marks dropped rows in the list, and renders an
       untyped kept body as text.
-- [ ] The README documents the knob, the default change, and the limits; `compose.yml` carries the
+- [x] The README documents the knob, the default change, and the limits; `compose.yml` carries the
       commented knob.
-- [ ] Backend and frontend test suites, lint, and typecheck pass.
+- [x] Backend and frontend test suites, lint, and typecheck pass.
+
+## Decisions made during implementation
+
+- **Unparseable multipart is dropped whole** (user, review round 2; recorded as `malformed` then,
+  given its own reason `form` in round 3 — see below). This replaces the
+  spec's "whole-body steps 4–5 instead": those checks cannot see an SVG or `Content-Transfer-Encoding`
+  part inside a form. It covers no boundary, a boundary over RFC 2046's 70 characters (which also
+  bounds the delimiter search), a skipped region, a part header block that is not text or has a line
+  that is not `name: value` (or a bare CR/LF), and a body with no close delimiter.
+- **PDF/PostScript headers match at any line start in the first 1 KB** (user, review round 2).
+  Readers look through the first 1 KB, so a leading line must not hide a PDF; text mentioning
+  `%PDF-` mid-line is kept. A PDF/PostScript marker anywhere in a part header block drops the form.
+- **SVG check skips the whole XML prolog with no 1 KB cap**: a cap would let padding push `<svg`
+  past it. The doctype scan skips quoted literals and internal-subset comments/PIs; a
+  namespace-prefixed root (`<s:svg>`) counts.
+- **Charset labels are resolved as TextDecoder resolves them**, so WHATWG UTF-16 aliases (`ucs-2`,
+  `unicode`, `csunicode`…) are banned alongside the literal utf-7/utf-16*/utf-32* names.
+- **Signature list widened**: Netpbm P1–P7 (whitespace or CR/LF-ended comments after the magic),
+  vCard `PHOTO`, `LOGO` or `SOUND`.
+- **Viewer with media off builds no blobs at all**, not only for binary: a failed config fetch on a
+  media-on instance must not turn image bytes into a file. Over-cap text says the rest is not shown.
+  It decodes every body as UTF-8 (what the byte check verified), and renders an unknown type as text
+  when its bytes are valid UTF-8.
+- **Viewer waits for `/api/config`** (5 s timeout, failure = media off) before rendering a body, so
+  a media-on instance never flashes the media-off path; a whole-body drop notice renders at once.
+- **Deliberate media-on change**: `classifyBody` now mirrors the backend's text allowlist, so types
+  such as `application/sql`, `graphql`, `csp-report` and `x-amz-json-1.1` render as text or JSON
+  on every instance instead of hex plus download.
+- **List marker** is a muted `dropped` badge with `role="img"`, labelled with the size and every
+  distinct dropped type; no tab stop, since the row's link leads to the full notice.
+- **Parser port**: the backend multipart parser stops at the close delimiter, exposes raw header
+  blocks and every header line, and reports whether the body was closed. Its trim and parameter
+  scans are linear (a trimming regex and a re-searched `=` were quadratic on 1 MB of sender text).
+
+- **Unparseable forms get their own reason, `form`** (review round 3), so the notice says "form
+  did not parse" instead of blaming a content-type that parsed. Boundaries must use RFC 2046's
+  bchars as well as its 70-character limit, and delimiter lines may carry transport padding.
+- **Read side trusts rows the gate checked** (review round 3): capture sets
+  `requests.body_checked = 1` with media off, and the body endpoint re-runs the filter only for
+  other rows (media on, or older), since one stored crafted form cost up to 213 ms per unmetered
+  read. The charset verdict is memoised for the same reason.
+- **Signatures, round 3**: bare `%!` for PostScript at a line start, Netpbm width-after-magic and
+  space-after-P7 forms, PFM/half-float maps, FITS, folded vCard properties, a raw email whose
+  MIME-Version is anywhere in its opening header block, and non-ASCII SVG root prefixes.
+
+- **Round 4**: the read side serves the filter's output when it drops nothing, so a text-only form
+  captured with media on is served rebuilt (preamble and padding gone) instead of withheld;
+  `body_checked` stores `GATE_VERSION` (now 2) so a gate fix re-checks rows an older gate kept;
+  PostScript means `%!` then `PS`, whitespace or line end (Go's `%!v(MISSING)` and `%!TEX` kept),
+  while any `%!` in a part header drops the form; VICAR and ImageMagick text images added.
+
+## What was built
+
+- Backend: `src/config.ts` (`allowMedia`), `src/media-type.ts` (strict RFC 9110 parser, ported
+  lenient parameter parser), `src/multipart.ts` (ported parser), `src/body-filter.ts` (the gate),
+  `src/routes/collect.ts` (filter at capture from raw headers, drop log line),
+  `src/routes/request.ts` (read-side re-filter for rows not checked by the current gate version,
+  inert text/plain + CORP serving, withheld header),
+  `src/routes/config.ts` (`GET /api/config`), `src/db-init.ts` (`body_dropped` + `body_checked` columns and migrations),
+  `src/schemas.ts`, `src/routes/hole.ts`, `src/app.ts` (CORS exposure, startup line, logger option).
+- Frontend: `src/services.ts` (`getConfig`, withheld flag), `src/mediaConfigContext.ts`,
+  `src/MediaConfigProvider.tsx`, `src/utils/bodyDropped.ts`, `src/utils/mediaType.ts` (top-level
+  gate, text allowlist), `src/components/RequestBody.tsx` (notices, media-off rendering),
+  `src/components/Request.tsx`, `src/components/Hole.tsx` (list marker), `src/main.tsx`.
+- Docs: README Configuration row, "Media and binary bodies", "Limits of ALLOW_MEDIA", route table;
+  `compose.yml` commented knob.
+
+## Implementation log
+
+- 2026-09-14: Built backend gate, viewer and docs TDD-first; verified in the in-app browser with
+  media off (PNG, SVG-as-text, gzip JSON, mixed multipart, JSON webhook) and on, plus withheld rows
+  after switching off. Review round 1 (18 findings incl. a ReDoS blocker) all fixed; round 2
+  (12 findings incl. an O(n·m) long-boundary search and an unclosed-multipart bypass) all fixed
+  with the two user decisions above. Round 3 (17 minor/nit findings, no blockers or majors) all
+  fixed. Round 4 (11 minor/nit findings) all fixed.
+

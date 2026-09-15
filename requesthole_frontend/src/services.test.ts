@@ -164,3 +164,98 @@ describe("a hole creation the backend refuses", () => {
     );
   });
 });
+
+describe("instance config", () => {
+  it("reports media allowed only when the backend says exactly that", async () => {
+    vi.mocked(axios.get).mockResolvedValue({
+      status: 200,
+      data: { allowMedia: true },
+    });
+    await expect(holeService.getConfig()).resolves.toEqual({
+      allowMedia: true,
+    });
+    expect(axios.get).toHaveBeenCalledWith(
+      `${holeService.BASE_URL}/api/config`,
+      expect.anything(),
+    );
+  });
+
+  // A missing answer must be safe: anything but a well-formed yes is media off.
+  it.for([
+    [
+      "a failed fetch",
+      () => vi.mocked(axios.get).mockRejectedValue(new Error("down")),
+    ],
+    [
+      "a non-boolean",
+      () =>
+        vi
+          .mocked(axios.get)
+          .mockResolvedValue({ status: 200, data: { allowMedia: "true" } }),
+    ],
+    [
+      "an HTML page",
+      () =>
+        vi
+          .mocked(axios.get)
+          .mockResolvedValue({ status: 200, data: "<!doctype html>" }),
+    ],
+    [
+      "no body",
+      () => vi.mocked(axios.get).mockResolvedValue({ status: 200, data: null }),
+    ],
+  ] as const)("treats %s as media off", async ([, arrange]) => {
+    arrange();
+    await expect(holeService.getConfig()).resolves.toEqual({
+      allowMedia: false,
+    });
+  });
+});
+
+// A hung config endpoint must not hold the viewer back forever: the request
+// carries its own deadline, and running out of time reads as media off.
+describe("instance config deadline", () => {
+  it("gives the config request a five-second deadline", async () => {
+    vi.mocked(axios.get).mockResolvedValue({
+      status: 200,
+      data: { allowMedia: true },
+    });
+    await holeService.getConfig();
+    expect(vi.mocked(axios.get).mock.calls[0]![1]).toMatchObject({
+      timeout: 5_000,
+    });
+  });
+
+  it("treats a request that ran out of time as media off", async () => {
+    vi.mocked(axios.get).mockRejectedValue(
+      Object.assign(new Error("timeout of 5000ms exceeded"), {
+        code: "ECONNABORTED",
+      }),
+    );
+    await expect(holeService.getConfig()).resolves.toEqual({
+      allowMedia: false,
+    });
+  });
+});
+
+describe("body bytes", () => {
+  it("passes the bytes through, not withheld", async () => {
+    const data = new ArrayBuffer(3);
+    vi.mocked(axios.get).mockResolvedValue({ status: 200, data, headers: {} });
+    await expect(holeService.getBodyBytes("abc123")).resolves.toEqual({
+      bytes: data,
+      withheld: false,
+    });
+  });
+
+  it("reports a body the backend withheld", async () => {
+    vi.mocked(axios.get).mockResolvedValue({
+      status: 200,
+      data: new ArrayBuffer(0),
+      headers: { "x-requesthole-body-withheld": "true" },
+    });
+    await expect(holeService.getBodyBytes("abc123")).resolves.toMatchObject({
+      withheld: true,
+    });
+  });
+});
