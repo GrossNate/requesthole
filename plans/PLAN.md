@@ -120,4 +120,4 @@ Durable decisions that apply across all tasks.
 - [x] 0007 · Resource bounds, abuse control, and sub-path capture (after 0006) → tasks/done/0007-bounds-and-subpaths.md
 - [x] 0008 · Text-only bodies by default (ALLOW_MEDIA) (after 0007) → tasks/done/0008-allow-media.md
 - [~] 0009 · General review of the finished application (after 0008) → tasks/0009-general-review.md
-- [~] 0010 · Resolve reviewed security and operations findings (after 0008) → tasks/0010-reviewed-findings.md
+- [>] 0010 · Resolve reviewed security and operations findings (after 0008) → tasks/0010-reviewed-findings.md
