@@ -6,6 +6,7 @@ services:
     # Internal-only: reachable as http://backend:3000 on the compose network.
     environment:
       DATABASE_PATH: /data/requesthole.db
+      TRUSTED_PROXY_ADDRESS: ${NGINX_PROXY_ADDRESS:-172.31.255.2}
       # Resource bounds — all optional; these are the defaults. See the
       # README's Configuration table.
       # RETENTION_DAYS: 7
@@ -21,6 +22,19 @@ services:
       # Directory volume, not a single file: SQLite WAL mode writes .db + -wal + -shm
       # sidecars that must sit together and persist.
       - data:/data
+    networks:
+      - backend_private
+    healthcheck:
+      # This route queries SQLite, so a 200 means both Fastify and storage are ready.
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/holes').then((response) => { if (!response.ok) process.exit(1); }).catch(() => process.exit(1))"
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
   nginx:
     build:
@@ -30,7 +44,23 @@ services:
     ports:
       - '${WEB_PORT:-8080}:80'
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+    networks:
+      backend_private:
+        ipv4_address: ${NGINX_PROXY_ADDRESS:-172.31.255.2}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
 
 volumes:
   data:
+
+networks:
+  backend_private:
+    ipam:
+      config:
+        - subnet: ${BACKEND_SUBNET:-172.31.255.0/24}

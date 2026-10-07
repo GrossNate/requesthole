@@ -62,6 +62,8 @@ type CreateError = {
 function App() {
   const [holes, setHoles] = useState<holeObject[]>([]);
   const [loadState, setLoadState] = useState<LoadState>("loading");
+  const [holesMenuOpen, setHolesMenuOpen] = useState(false);
+  const holesMenuRef = useRef<HTMLDivElement>(null);
   // Kept apart from `loadState`: a create that fails says nothing about the
   // list, which may have loaded perfectly well.
   const [createError, setCreateError] = useState<CreateError | null>(null);
@@ -79,6 +81,18 @@ function App() {
   // Bumped by each create. A create that a newer one has superseded does not
   // get to report: its outcome says nothing about the latest attempt.
   const latestCreate = useRef(0);
+
+  useEffect(() => {
+    if (!holesMenuOpen) return;
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!holesMenuRef.current?.contains(event.target as Node)) {
+        setHolesMenuOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    return () =>
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+  }, [holesMenuOpen]);
 
   // A message belongs to the page the create started on and only renders
   // there. One that landed while the reader was elsewhere waits until they
@@ -193,26 +207,33 @@ function App() {
             <Link to="/" className="btn btn-sm btn-ghost text-body">
               Home
             </Link>
-            <div className="dropdown dropdown-hover dropdown-end">
-              <div
-                tabIndex={0}
-                role="button"
+            <div
+              ref={holesMenuRef}
+              className="relative"
+              onBlur={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                  setHolesMenuOpen(false);
+                }
+              }}
+            >
+              <button
+                type="button"
                 className="btn btn-sm btn-ghost text-body"
+                aria-expanded={holesMenuOpen}
+                aria-controls="holes-menu"
+                onClick={() => setHolesMenuOpen((open) => !open)}
               >
                 Holes
                 <span className="text-base-content/40 text-caption">
                   {holes.length > 0 ? holes.length : ""}
                 </span>
-              </div>
-              {/* No top margin: the menu is positioned outside the trigger's
-                  box, so a gap is ground the pointer crosses while hovering
-                  neither one, and the menu closes before it can be reached.
-                  The breathing room comes from the menu's own padding.
-                  Width follows the content — a six-character address needs
-                  nowhere near a fixed 14rem. */}
+              </button>
+              {/* The disclosure is click/keyboard controlled so its expanded
+                  state matches the menu's visibility. */}
               <ul
-                tabIndex={0}
-                className="menu dropdown-content bg-base-200 border-base-300 rounded-box z-1 w-max min-w-32 border p-tight shadow-lg"
+                id="holes-menu"
+                hidden={!holesMenuOpen}
+                className="menu bg-base-200 border-base-300 rounded-box absolute top-full right-0 z-1 mt-1 w-max min-w-32 border p-tight shadow-lg"
               >
                 {holes.length === 0 ? (
                   <li>
@@ -233,6 +254,7 @@ function App() {
                       <Link
                         to={`/view/${hole.hole_address}`}
                         className="address"
+                        onClick={() => setHolesMenuOpen(false)}
                       >
                         {hole.hole_address}
                       </Link>

@@ -9,6 +9,45 @@ import RequestBroadcaster from "../src/RequestBroadcaster";
 import type { FastifyInstance } from "fastify";
 import { captureRequest, createHole } from "./helpers";
 
+describe("trusted proxy", () => {
+  it("uses forwarded client IPs only for the configured proxy peer", async () => {
+    const proxyAddress = "172.31.255.2";
+    const app = buildApp({
+      databasePath: ":memory:",
+      trustedProxyAddress: proxyAddress,
+    });
+    app.get("/test/client-ip", (request) => ({ ip: request.ip }));
+    await app.ready();
+
+    try {
+      const trusted = await app.inject({
+        method: "GET",
+        url: "/test/client-ip",
+        remoteAddress: proxyAddress,
+        headers: { "x-forwarded-for": "198.51.100.9" },
+      });
+      const untrusted = await app.inject({
+        method: "GET",
+        url: "/test/client-ip",
+        remoteAddress: "172.31.255.3",
+        headers: { "x-forwarded-for": "198.51.100.9" },
+      });
+      const loopback = await app.inject({
+        method: "GET",
+        url: "/test/client-ip",
+        remoteAddress: "127.0.0.1",
+        headers: { "x-forwarded-for": "198.51.100.9" },
+      });
+
+      expect(trusted.json()).toEqual({ ip: "198.51.100.9" });
+      expect(untrusted.json()).toEqual({ ip: "172.31.255.3" });
+      expect(loopback.json()).toEqual({ ip: "127.0.0.1" });
+    } finally {
+      await app.close();
+    }
+  });
+});
+
 describe("holes", () => {
   let app: FastifyInstance;
 
