@@ -14,7 +14,8 @@ Compose v2. You don't need Node on the host, and a default deploy needs no
 configuration at all: no secrets, no separate database to provision, and no
 Nginx to set up by hand. Beyond the published port and the `DATABASE_PATH` that
 Compose sets for you, every setting is an optional resource bound with a
-working default; see [Configuration](#configuration).
+working default; see [Configuration](#configuration). If the default private
+subnet overlaps another network on your Docker host, choose a different one there.
 
 From the repository root:
 
@@ -47,8 +48,10 @@ That builds two services:
   them (`^/[a-zA-Z0-9]{6}(/.*)?$`), to the backend, so the whole app lives on
   one origin. The built `/assets/` directory is matched first, so a hashed
   asset name that happens to look like an address is never proxied.
-- **`backend`** — Fastify, reachable only inside the Compose network at
-  `backend:3000`. It stores everything in SQLite at `/data/requesthole.db` on
+- **`backend`** — Fastify, reachable only inside the private Compose network at
+  `backend:3000`. That network is shared only by Nginx and the backend; Fastify
+  trusts forwarded client addresses only from Nginx's configured fixed address.
+  It stores everything in SQLite at `/data/requesthole.db` on
   the `data` volume, and creates its own tables on startup — there is no
   migration step. SQLite runs in WAL mode, so it writes `-wal` and `-shm`
   sidecars alongside that file; all three have to persist together, which is why
@@ -131,6 +134,8 @@ does it as the first half of its build:
 | Variable                 | Used by             | Default         | Purpose                                                                                                                                                                         |
 | :----------------------- | :------------------ | :-------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `DATABASE_PATH`          | backend             | none — required | Path to the SQLite file. Compose sets it to `/data/requesthole.db`; the dev script sets it to `./data/requesthole.db`.                                                          |
+| `BACKEND_SUBNET`         | Compose             | `172.31.255.0/24` | Private network shared by Nginx and the backend. If it overlaps another Docker network, choose an unused private subnet and set `NGINX_PROXY_ADDRESS` within it.                 |
+| `NGINX_PROXY_ADDRESS`    | Compose, backend    | `172.31.255.2`  | Fixed Nginx address on `backend_private`; the backend accepts forwarded client IPs only from this address.                                                                       |
 | `WEB_PORT`               | Compose, smoke test | `8080`          | Host port that the `nginx` service publishes.                                                                                                                                   |
 | `RETENTION_DAYS`         | backend             | `7`             | Holes older than this are deleted at startup and by an hourly sweep, along with their requests.                                                                                 |
 | `MAX_REQUESTS_PER_HOLE`  | backend             | `100`           | Requests kept per hole. Each capture beyond the cap evicts that hole's oldest request.                                                                                          |
@@ -148,8 +153,9 @@ through your shell. The numeric knobs must be positive integers, and
 refuses to start on anything else, so a typo such as `ALLOW_MEDIA=yes` stops
 the deploy instead of guessing. Rate limits key on the client address that Nginx
 forwards in `X-Forwarded-For`, so one busy client cannot lock everyone else out.
-Nginx sends only the peer address it saw, and the backend trusts exactly that
-one hop, so a client cannot pick its own bucket by setting the header itself.
+Nginx sends only the peer address it saw. The backend accepts that header only
+from Nginx's fixed address on the private Compose network, so clients cannot
+choose their own bucket by setting the header themselves.
 Nginx also leaves body size to the backend and streams bodies through
 unbuffered, so `MAX_BODY_BYTES` is the one place the limit lives and an
 oversized upload is cut off at the limit rather than spooled to disk first.

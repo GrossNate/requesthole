@@ -34,7 +34,8 @@ Durable decisions that apply across all tasks.
   own origin. Client routes: `/`, `/view/:hole_address`, `/view/:hole_address/:request_address`.
 - **Deployment** (task 0001, storage retired in 0002): prod-only Docker Compose, two services —
   `nginx` (sole published port, `${WEB_PORT:-8080}:80`, serves static frontend + reverse-proxies)
-  and `backend` (internal, `backend:3000`), with a `data` volume at `/data` for the SQLite file.
+  and `backend` (internal, `backend:3000`), joined on a dedicated private network with a fixed
+  Nginx address trusted for forwarded client IPs, and a `data` volume at `/data` for SQLite.
   Nginx routing resolves single-origin traffic: `/api/*` → backend (SSE-safe: unbuffered, HTTP/1.1,
   long read timeout); `^~ /assets/` → static (declared first so hashed asset names are never
   mistaken for addresses); `^/[a-zA-Z0-9]{6}(/.*)?$` → backend (collect capture, sub-paths
@@ -45,8 +46,9 @@ Durable decisions that apply across all tasks.
   ownership, the global hole list stays; the controls bound consumption, not access. Per-hole cap
   (`MAX_REQUESTS_PER_HOLE`, 100) trimmed at insert time in the capture transaction; hourly TTL
   sweep (`RETENTION_DAYS`, 7) cascading to requests, timer cleared on close; `requests(hole_id)`
-  indexed; the sweep also runs once at startup. `trustProxy: 1` (one hop, nginx's own
-  `X-Forwarded-For: $remote_addr`, so a client cannot choose its bucket) and `@fastify/rate-limit`
+  indexed; the sweep also runs once at startup. A validated one-hop `trustProxy` function accepts
+  only the exact Nginx address on Compose's dedicated private network; Nginx sets
+  `X-Forwarded-For: $remote_addr`, so a client cannot choose its bucket. `@fastify/rate-limit`
   keyed on that IP (`HOLE_CREATE_RATE_LIMIT` 10/hour, `CAPTURE_RATE_LIMIT` 60/minute, one shared
   capture bucket across bare address and sub-paths); total ceiling `MAX_HOLES`
   (1000) refuses creation with a bare 503, never evicts; a per-client share of live holes
@@ -117,4 +119,5 @@ Durable decisions that apply across all tasks.
 - [x] 0006 · List/detail layout and durable live streaming (after 0005) → tasks/done/0006-list-detail-layout.md
 - [x] 0007 · Resource bounds, abuse control, and sub-path capture (after 0006) → tasks/done/0007-bounds-and-subpaths.md
 - [x] 0008 · Text-only bodies by default (ALLOW_MEDIA) (after 0007) → tasks/done/0008-allow-media.md
-- [ ] 0009 · General review of the finished application (after 0008) → tasks/0009-general-review.md
+- [~] 0009 · General review of the finished application (after 0008) → tasks/0009-general-review.md
+- [>] 0010 · Resolve reviewed security and operations findings (after 0008) → tasks/0010-reviewed-findings.md

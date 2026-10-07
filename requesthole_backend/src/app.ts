@@ -16,9 +16,29 @@ export interface AppOptions {
   databasePath?: string;
   /** `true` for the default logger; an object for a level and stream (tests). */
   logger?: boolean | { level?: string; stream?: { write(line: string): void } };
+  /** Exact Nginx peer address in Compose; defaults to local-only in development. */
+  trustedProxyAddress?: string;
   requestBroadcaster?: RequestBroadcaster;
   /** Operator knobs; anything omitted falls back to the environment, then defaults. */
   config?: ConfigOverrides;
+}
+
+function makeTrustedProxy(trustedProxyAddress?: string) {
+  const normalizeAddress = (address: string) =>
+    address.startsWith("::ffff:") ? address.slice(7) : address;
+  const trusted =
+    trustedProxyAddress === undefined
+      ? undefined
+      : normalizeAddress(trustedProxyAddress);
+
+  return (address: string, hop: number) => {
+    // Fastify's patched versions require the direct peer to be validated too.
+    // Compose configures this as Nginx's fixed address on a private network.
+    if (hop !== 0) return false;
+    const peer = normalizeAddress(address);
+    if (trusted !== undefined) return peer === trusted;
+    return peer === "127.0.0.1" || peer === "::1";
+  };
 }
 
 export default function buildApp(options: AppOptions = {}): FastifyInstance {
@@ -31,8 +51,11 @@ export default function buildApp(options: AppOptions = {}): FastifyInstance {
     // for every request and lump all clients into one bucket, so the first
     // person to hit a limit would lock out everybody. Exactly one hop, not
     // `true`, as defence in depth: should a chain ever arrive, trusting every
-    // hop would make the client's own leftmost entry the key.
-    trustProxy: 1,
+    // hop would make the client's own leftmost entry the key. Fastify now
+    // requires the trusted hop's address to be validated too.
+    trustProxy: makeTrustedProxy(
+      options.trustedProxyAddress ?? process.env.TRUSTED_PROXY_ADDRESS,
+    ),
     // Deadline for receiving a whole request, headers and body. nginx streams
     // capture bodies through unbuffered, so without one a client trickling
     // bytes holds a socket and a growing buffer forever; Fastify's default is

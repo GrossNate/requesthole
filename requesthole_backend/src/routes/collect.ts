@@ -144,7 +144,6 @@ function routesWrapper(
       RawReplyDefaultExpression,
       { Params: HoleParams }
     > = async (request, reply) => {
-      fastify.log.info("called collection route");
       const { hole_address } = request.params;
       const hole = selectHoleId.get(hole_address) as
         | { hole_id: number }

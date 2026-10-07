@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import holeService from "./services";
@@ -58,21 +58,63 @@ describe("app shell", () => {
 });
 
 describe("holes dropdown", () => {
-  // Every empty list goes through EmptyState, including this one — a menu is
-  // too small for the panel, which is what the compact variant is for.
-  it("uses the shared empty state when there are no holes", async () => {
+  it.each(["{Enter}", " "])("opens the Holes disclosure with %s", async (key) => {
+    const user = userEvent.setup();
     render(
       <MemoryRouter>
         <App />
       </MemoryRouter>,
     );
 
+    const trigger = screen.getByRole("button", { name: /holes/i });
+    const menu = document.getElementById("holes-menu")!;
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(menu).not.toBeVisible();
+    trigger.focus();
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(menu).not.toBeVisible();
+    await user.keyboard(key);
+
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(trigger).toHaveAttribute("aria-controls", "holes-menu");
+    expect(menu).toBeVisible();
+  });
+
+  it("closes the Holes disclosure when clicking outside it", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <App />
+      </MemoryRouter>,
+    );
+
+    const trigger = screen.getByRole("button", { name: /holes/i });
+    await user.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+
+    fireEvent.pointerDown(screen.getByRole("main"));
+
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(document.getElementById("holes-menu")).not.toBeVisible();
+  });
+
+  // Every empty list goes through EmptyState, including this one — a menu is
+  // too small for the panel, which is what the compact variant is for.
+  it("uses the shared empty state when there are no holes", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <App />
+      </MemoryRouter>,
+    );
+    await user.click(screen.getByRole("button", { name: /holes/i }));
+
     // Home's own empty state says the same thing, so scope to the menu.
     const headings = await screen.findAllByRole("heading", {
       name: /no holes yet/i,
     });
     const empty = headings.find((heading) =>
-      heading.closest(".dropdown-content"),
+      heading.closest("#holes-menu"),
     );
     expect(empty).toBeDefined();
     // Compact: no panel, so the dropdown does not get a dashed box inside it.
@@ -80,12 +122,14 @@ describe("holes dropdown", () => {
   });
 
   it("says so when the holes could not be loaded", async () => {
+    const user = userEvent.setup();
     vi.mocked(holeService.getHoles).mockRejectedValue(new Error("offline"));
     render(
       <MemoryRouter>
         <App />
       </MemoryRouter>,
     );
+    await user.click(screen.getByRole("button", { name: /holes/i }));
 
     expect(
       await screen.findByRole("heading", { name: /couldn't load holes/i }),

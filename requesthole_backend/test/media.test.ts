@@ -63,6 +63,24 @@ describe("media gate", () => {
     return listed[listed.length - 1]!.request_address;
   };
 
+  it("does not write a generic info log for each capture", async () => {
+    const { lines, logger } = logSink();
+    const app = await start({ logger });
+    const hole = await createHole(app);
+
+    const response = await app.inject({
+      method: "POST",
+      url: `/${hole}`,
+      headers: { "content-type": "text/plain" },
+      body: "captured",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(lines).not.toContainEqual(
+      expect.objectContaining({ msg: "called collection route" }),
+    );
+  });
+
   const fetchRequest = async (app: FastifyInstance, address: string) =>
     (
       await app.inject({ method: "GET", url: `/api/request/${address}` })

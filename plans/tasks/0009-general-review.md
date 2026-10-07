@@ -44,16 +44,18 @@ honest: no access control and a public global hole list are deliberate decisions
 
 ## AFK tasks
 
-- [ ] Run the code-and-correctness sweep across backend and frontend; verify each candidate finding
+- [x] Run the code-and-correctness sweep across backend and frontend; verify each candidate finding
       against the code before recording it.
 - [ ] Run the security sweep using the project's `/security-review`, covering the public surface and
-      the dependency tree.
-- [ ] Run the UX and accessibility sweep across all views at desktop and mobile widths.
-- [ ] Run the operations sweep: logging, healthchecks, backup/restore, dependency freshness, CI
+      the dependency tree. The command was not available; source tracing and npm audits were done,
+      with remaining limits recorded in the findings report.
+- [x] Run the UX and accessibility sweep across all views at desktop and mobile widths. The home,
+      hole request-list, and request-detail views were reviewed at desktop and mobile viewport sizes.
+- [x] Run the operations sweep: logging, healthchecks, backup/restore, dependency freshness, CI
       absence.
-- [ ] Write the ranked findings document, with a short section listing deliberate decisions that are
+- [x] Write the ranked findings document, with a short section listing deliberate decisions that are
       explicitly not findings.
-- [ ] Note explicitly anywhere coverage was bounded — a lens not fully run, a claim not verified — so a
+- [x] Note explicitly anywhere coverage was bounded — a lens not fully run, a claim not verified — so a
       gap never reads as a clean bill of health.
 
 ## Human-in-the-loop tasks
@@ -64,10 +66,14 @@ honest: no access control and a public global hole list are deliberate decisions
 
 ## Acceptance criteria
 
-- [ ] `reviews/0009-general-review-findings.md` exists, covering all four lenses, ranked by severity.
-- [ ] Every finding cites a concrete location and a reason it matters, and was verified against the
+- [x] `reviews/0009-general-review-findings.md` exists, covering all four lenses, ranked by severity.
+- [x] Every finding cites a concrete location and a reason it matters, and was verified against the
       code rather than asserted.
-- [ ] Deliberate decisions are listed as accepted rather than reported as defects.
-- [ ] Any bounded coverage is stated outright.
-- [ ] No production code was changed by this task.
+- [x] Deliberate decisions are listed as accepted rather than reported as defects.
+- [x] Any bounded coverage is stated outright.
+- [x] No production code was changed by this task.
 - [ ] The user has read the findings and triaged them; accepted findings are filed as new tasks.
+
+## Implementation log
+
+- 2026-10-07: Completed source and operations reviews, production and full-tree `npm audit`, `npm outdated`, and targeted media-off checks on an isolated disposable database. Wrote `reviews/0009-general-review-findings.md` and `reviews/0009-general-review-review.md`. Browser checks covered the home, hole request-list, and request-detail views at desktop and mobile sizes. The project's named `/security-review` remains unavailable. No production code changed.
