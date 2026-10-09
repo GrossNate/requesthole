@@ -48,7 +48,7 @@ services:
         condition: service_healthy
     networks:
       backend_private:
-        ipv4_address: ${NGINX_PROXY_ADDRESS:-172.31.255.2}
+        ipv4_address: ${NGINX_PROXY_ADDRESS:-172.31.255.3}
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
       interval: 30s
